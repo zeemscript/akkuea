@@ -1,20 +1,11 @@
-import type { PropertyInfo, ValuationRecord } from "@real-estate-defi/shared";
+import type { PropertyInfo, ValuationRecord } from "@akkuea/shared";
 import type { PaginatedResponse } from "./types";
 
 export type OperationsQueue =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "hold"
-  | "changes"
-  | "all";
+  "pending" | "approved" | "rejected" | "hold" | "changes" | "all";
 
 export type PropertyReviewStatus =
-  | "pending_review"
-  | "approved"
-  | "rejected"
-  | "changes_requested"
-  | "on_hold";
+  "pending_review" | "approved" | "rejected" | "changes_requested" | "on_hold";
 
 export type ReviewAction = "approve" | "reject" | "request_changes" | "hold";
 
@@ -119,6 +110,37 @@ export const adminOperationsApi = {
     body: { action: ReviewAction; note?: string; actorWallet: string },
   ): Promise<{ success: boolean; data: OperationalPropertyDetail }> {
     return adminFetch(`properties/${propertyId}/review`, operatorWallet, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+};
+
+export interface WhitelistRequest {
+  id: string;
+  walletAddress: string;
+  fullName: string;
+  idType: string;
+  idReference: string;
+  status: string;
+  rejectionReason?: string | null;
+  createdAt: string;
+  reviewedAt?: string | null;
+}
+
+export const whitelistOperationsApi = {
+  async getPendingWhitelist(
+    operatorWallet: string | null,
+  ): Promise<{ success: boolean; data: WhitelistRequest[] }> {
+    return adminFetch(`pilot/whitelist/pending`, operatorWallet);
+  },
+
+  async reviewWhitelistRequest(
+    operatorWallet: string | null,
+    requestId: string,
+    body: { action: "approve" | "reject"; reason?: string },
+  ): Promise<{ success: boolean; txHash?: string }> {
+    return adminFetch(`pilot/whitelist/${requestId}/review`, operatorWallet, {
       method: "POST",
       body: JSON.stringify(body),
     });

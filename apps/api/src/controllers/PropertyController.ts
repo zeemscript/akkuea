@@ -1,13 +1,12 @@
-import type {
-  PropertyInfo,
-  ShareOwnership as SharedShareOwnership,
-} from '@real-estate-defi/shared';
+import type { PropertyInfo, ShareOwnership as SharedShareOwnership } from '@akkuea/shared';
 import {
   ValidationError,
   NotFoundError,
   AuthenticationError,
   AuthorizationError,
-} from '@real-estate-defi/shared';
+  parseDecimalStringToBigInt,
+  formatBigIntAsDecimalString,
+} from '@akkuea/shared';
 import { and, eq } from 'drizzle-orm';
 import { logger } from '../services/logger';
 import { db } from '../db';
@@ -138,17 +137,23 @@ function mapShareOwnershipToShared(
   };
 }
 
+// Caps `page` so the computed offset ((page - 1) * limit in
+// PropertyRepository.findPaginated) cannot grow unbounded. At the max
+// limit of 100 this allows scanning up to 1,000,000 rows deep, far beyond
+// any realistic result set for this pilot.
+export const MAX_PAGE = 10_000;
+
 /**
  * Validates pagination parameters
  */
-function validatePagination(page: unknown, limit: unknown): { page: number; limit: number } {
+export function validatePagination(page: unknown, limit: unknown): { page: number; limit: number } {
   const pageNum =
     typeof page === 'string' ? parseInt(page, 10) : typeof page === 'number' ? page : 1;
   const limitNum =
     typeof limit === 'string' ? parseInt(limit, 10) : typeof limit === 'number' ? limit : 10;
 
   return {
-    page: pageNum > 0 ? pageNum : 1,
+    page: pageNum > 0 ? Math.min(pageNum, MAX_PAGE) : 1,
     limit: limitNum > 0 && limitNum <= 100 ? limitNum : 10,
   };
 }
@@ -582,7 +587,17 @@ export class PropertyController {
       }
 
       const buyer = await userRepository.getOrCreateByWallet(data.buyer);
-      const totalPurchasePrice = (parseFloat(property.pricePerShare) * data.shares).toFixed(2);
+
+      if (buyer.kycStatus !== 'approved') {
+        const msg =
+          buyer.kycStatus === 'expired'
+            ? 'Your KYC verification has expired. Please re-verify before purchasing shares.'
+            : 'KYC verification must be approved before purchasing shares';
+        throw new AuthorizationError(msg);
+      }
+      const pricePerShareBig = parseDecimalStringToBigInt(property.pricePerShare, 2);
+      const totalPurchasePriceBig = pricePerShareBig * BigInt(data.shares);
+      const totalPurchasePrice = formatBigIntAsDecimalString(totalPurchasePriceBig, 2);
       const { adminPublicKey, adminSecret } = stellarService.getMintingConfig();
       const { txHash: transactionHash } = await stellarService.mintPropertyShares({
         contractId: property.tokenAddress,
@@ -622,9 +637,11 @@ export class PropertyController {
               .update(shareOwnerships)
               .set({
                 shares: existingOwnership.shares + data.shares,
-                purchasePrice: (
-                  parseFloat(existingOwnership.purchasePrice) + parseFloat(totalPurchasePrice)
-                ).toFixed(2),
+                purchasePrice: formatBigIntAsDecimalString(
+                  parseDecimalStringToBigInt(existingOwnership.purchasePrice, 2) +
+                    parseDecimalStringToBigInt(totalPurchasePrice, 2),
+                  2,
+                ),
               })
               .where(eq(shareOwnerships.id, existingOwnership.id))
               .returning()

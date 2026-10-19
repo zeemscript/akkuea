@@ -7,7 +7,7 @@ import { PRIVY_APP_CREDENTIAL_ENV, PRIVY_APP_ID_ENV } from "@/lib/privy-env";
  * POST /api/privy/sign
  *
  * Server-side proxy for Privy's raw_sign endpoint.
- * Stellar is a Tier-2 chain in Privy — signing goes through the REST API,
+ * Stellar is a Tier-2 chain in Privy - signing goes through the REST API,
  * not the React SDK. The app secret must never be exposed to the browser.
  *
  * Request body:
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
   }
 
   const txHash = tx.hash();
-  const hashHex = "0x" + txHash.toString("hex");
+  const hashHex = "0x" + Buffer.from(txHash).toString("hex");
 
   const credentials = Buffer.from(`${appId}:${appCredential}`).toString(
     "base64",

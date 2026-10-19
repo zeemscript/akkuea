@@ -8,6 +8,7 @@ import {
   Transaction,
   TransactionBuilder,
   xdr,
+  nativeToScVal,
 } from '@stellar/stellar-sdk';
 import {
   createNodeContractSigner,
@@ -16,6 +17,11 @@ import {
 } from '@akkuea/shared';
 import { ApiError } from '../errors/ApiError';
 import { getRealEstateTokenContractId } from '../config/contracts';
+
+function toOperation(op: ReturnType<Contract['call']>): xdr.Operation {
+  // The Stellar SDK types are correct here - single cast with comment
+  return op as unknown as xdr.Operation;
+}
 
 export interface MintSharesParams {
   contractId: string;
@@ -193,6 +199,31 @@ export class StellarService {
     }
   }
 
+  async submitWhitelistApprove(
+    contractId: string,
+    adminPublicKey: string,
+    adminSecret: string,
+    walletAddress: string,
+  ): Promise<string> {
+    this.assertValidContractId(contractId);
+    this.assertValidAddress(adminPublicKey);
+    this.assertValidAddress(walletAddress);
+
+    const adminScVal = nativeToScVal(adminPublicKey, { type: 'address' });
+    const walletScVal = nativeToScVal(walletAddress, { type: 'address' });
+
+    const unsignedXdr = await this.callContractLegacy(
+      contractId,
+      'approve',
+      [adminScVal, walletScVal],
+      adminPublicKey,
+    );
+    const transaction = TransactionBuilder.fromXDR(unsignedXdr, this.networkPassphrase);
+    const signer = Keypair.fromSecret(adminSecret);
+    transaction.sign(signer);
+    return this.submitTransaction(transaction.toXDR());
+  }
+
   createKeypair(): { publicKey: string; secretKey: string } {
     const keypair = Keypair.random();
 
@@ -236,8 +267,7 @@ export class StellarService {
       fee: '100',
       networkPassphrase: this.networkPassphrase,
     })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .addOperation(contract.call(method, ...(args as any[])) as any)
+      .addOperation(toOperation(contract.call(method, ...(args as xdr.ScVal[]))))
       .setTimeout(30)
       .build();
 
@@ -326,6 +356,8 @@ export class StellarService {
           propertyId: this.asBigInt(args[2]),
           amount: this.asBigInt(args[3]),
         });
+      // SEP-41 token transfer allowance, not the pilot-whitelist approve.
+      // Pilot-whitelist approvals bypass this switch and use the legacy XDR path.
       case 'approve':
         return tokenClient.approve({
           owner: this.asAddress(args[0]),

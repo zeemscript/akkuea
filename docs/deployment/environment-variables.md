@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-**Source of truth:** `akkuea-defi-rwa/apps/api/.env.example`
+**Source of truth:** `apps/api/.env.example`
 
 This document lists every environment variable required to run the Akkuea platform. All variables come directly from the `.env.example` file. Any variable not listed here does not exist in the codebase and should not be referenced.
 
@@ -11,7 +11,7 @@ This document lists every environment variable required to run the Akkuea platfo
 ## How to set up
 
 ```bash
-cp akkuea-defi-rwa/apps/api/.env.example akkuea-defi-rwa/apps/api/.env
+cp apps/api/.env.example apps/api/.env
 # Edit .env and fill in every value marked as required
 ```
 
@@ -35,6 +35,18 @@ cp akkuea-defi-rwa/apps/api/.env.example akkuea-defi-rwa/apps/api/.env
 | `NODE_ENV`  | `development` | Yes                  | Runtime environment. Use `production` for live deployments |
 | `LOG_LEVEL` | `info`        | No                   | Logging verbosity (`debug`, `info`, `warn`, `error`)       |
 
+### Rate Limiting
+
+Rate-limited routes (`apps/api/src/middleware/rateLimit.ts`) key each client by the address it connected from, so a client cannot choose its own identity by sending an address header. `TRUSTED_PROXY_HOPS` is the only configuration that changes that, and it must match the number of reverse proxies actually in front of the API.
+
+The limiter counts an in-memory sliding window per client unless `REDIS_URL` is set, in which case the same window is counted in Redis so every instance shares it. In-memory counters are bounded: expired clients are dropped on access and by a periodic sweep, and a hard cap evicts the clients nearest expiry when the store is full.
+
+| Variable             | Example Value | Required          | Description                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------- | ------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TRUSTED_PROXY_HOPS` | `1`           | No (default: `0`) | Number of reverse proxies in front of the API that are trusted to append to `x-forwarded-for`. `0` (the default) means no proxy is trusted and the client address is read from the socket only. With `N`, the address is taken `N` entries from the right of the `x-forwarded-for` chain; a shorter chain falls back to the socket address. `x-real-ip` is never trusted |
+
+> **Deploying behind a proxy:** leaving `TRUSTED_PROXY_HOPS` at `0` means every request is keyed by the proxy's own address, so all clients share one bucket. Set it to the exact number of proxies you operate (load balancer, ingress, sidecar) and no more: every hop counted is a hop a client could otherwise spoof through.
+
 ### Internal Security
 
 | Variable                        | Example Value                   | Required         | Description                                                                                                                                                 |
@@ -48,6 +60,52 @@ cp akkuea-defi-rwa/apps/api/.env.example akkuea-defi-rwa/apps/api/.env
 | Variable         | Example Value             | Required | Description                                                                                                                    |
 | ---------------- | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `KYC_UPLOAD_DIR` | `/var/akkuea/kyc-uploads` | Yes      | Absolute path on the server where KYC document files are stored. The API process must have read/write access to this directory |
+
+### KYC Expiry Job
+
+The KYC expiry job runs in the background to mark expired KYC records and send re-verification reminders. All three variables are optional - the defaults are suitable for production.
+
+| Variable                        | Example Value | Required             | Description                                                                                                                                         |
+| ------------------------------- | ------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KYC_EXPIRY_JOB_ENABLED`        | `true`        | No (default: `true`) | Set to `false` to disable the KYC expiry background job entirely (e.g. in test environments)                                                        |
+| `KYC_EXPIRY_POLL_INTERVAL_MS`   | `86400000`    | No (default: 24h)    | How often the job runs, in milliseconds. Default is `86400000` (24 hours). Set lower in staging to test expiry behaviour without waiting a full day |
+| `KYC_EXPIRY_REMINDER_WINDOW_MS` | `2592000000`  | No (default: 30d)    | How far in advance to send the expiry reminder notification, in milliseconds. Default is `2592000000` (30 days)                                     |
+
+### Pilot Ally Reporting Escalation Job
+
+The escalation job proactively watches `pilot-payout-split`'s on-chain evidence history and notifies an operator when the pilot ally has missed two (configurable) or more consecutive expected reporting cycles, instead of leaving this as a passive dashboard-only signal. See `apps/api/src/workers/pilotEscalationJob.ts`.
+
+The reporting cadence, breach threshold, and re-notification cadence are all configurable because they are properties of a specific ally's agreement, which does not exist yet for the pilot. `PILOT_ESCALATION_AGREEMENT_START` and `PILOT_ESCALATION_OPERATOR_USER_ID` are required for the job to actually run; without them it logs a warning each tick and does nothing (it does not crash).
+
+| Variable                                | Example Value                         | Required                               | Description                                                                                                                                    |
+| --------------------------------------- | ------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PILOT_ESCALATION_JOB_ENABLED`          | `true`                                | No (default: `true`)                   | Set to `false` to disable the escalation background job entirely (e.g. in test environments)                                                   |
+| `PILOT_ESCALATION_AGREEMENT_START`      | `2026-01-15T00:00:00.000Z`            | Yes (to run)                           | ISO date the ally's reporting agreement began. Without this the job skips every tick                                                           |
+| `PILOT_ESCALATION_OPERATOR_USER_ID`     | `b3f1...` (a user UUID)               | Yes (to run)                           | User ID of the operator to notify through the existing notification pipeline. Without this the job skips every tick                            |
+| `PILOT_ESCALATION_CADENCE_DAYS`         | `30`                                  | No (default: `30`)                     | Expected evidence-reporting cadence, in days, per the ally's agreement                                                                         |
+| `PILOT_ESCALATION_THRESHOLD_CYCLES`     | `2`                                   | No (default: `2`)                      | Consecutive missed cycles that constitutes a breach                                                                                            |
+| `PILOT_ESCALATION_POLL_INTERVAL_MS`     | `21600000`                            | No (default: 6h)                       | How often the job runs, in milliseconds                                                                                                        |
+| `PILOT_ESCALATION_RENOTIFY_INTERVAL_MS` | `604800000`                           | No (default: 7d)                       | While the same breach persists unresolved, how often to re-send the notification rather than staying silent forever. Not re-sent on every poll |
+| `PILOT_PAYOUT_SPLIT_CONTRACT_ID`        | `CXXX...` (56 chars, starts with `C`) | No (falls back to deployment artifact) | Overrides the resolved `pilot-payout-split` contract ID for this network                                                                       |
+
+### Idempotency Cleanup Job
+
+The idempotency cleanup job periodically deletes expired rows from `idempotency_keys`. Without it, expired keys are only ever reclaimed if the same `Idempotency-Key` header value is reused (see `apps/api/src/middleware/idempotency.ts`); a key that is never reused would otherwise stay in the table forever. See `apps/api/src/workers/idempotencyCleanupJob.ts`.
+
+| Variable                               | Example Value | Required             | Description                                                                               |
+| -------------------------------------- | ------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `IDEMPOTENCY_CLEANUP_JOB_ENABLED`      | `true`        | No (default: `true`) | Set to `false` to disable the idempotency cleanup background job entirely (e.g. in tests) |
+| `IDEMPOTENCY_CLEANUP_POLL_INTERVAL_MS` | `3600000`     | No (default: 1h)     | How often the job runs, in milliseconds. Default is `3600000` (1 hour)                    |
+
+### Pilot Review Turnaround SLA
+
+Whitelist-review and evidence-review turnaround against the documented SLA (see `docs/operations/pilot-review-sla.md`). Exposed at `GET /pilot/whitelist/metrics` (operator key required). The targets are calendar hours so they can change with a signed ally's expectations without a code change.
+
+| Variable                           | Example Value | Required           | Description                                                                                |
+| ---------------------------------- | ------------- | ------------------ | ------------------------------------------------------------------------------------------ |
+| `PILOT_WHITELIST_REVIEW_SLA_HOURS` | `48`          | No (default: `48`) | Hours from whitelist request submission (`createdAt`) to operator review (`reviewedAt`)    |
+| `PILOT_EVIDENCE_REVIEW_SLA_HOURS`  | `48`          | No (default: `48`) | Hours from a reporting cycle's due date to on-chain `record_evidence` (`recorded_at`)      |
+| `PILOT_REVIEW_METRICS_WINDOW_DAYS` | `30`          | No (default: `30`) | Default lookback for `GET /pilot/whitelist/metrics` when `from` / `windowDays` are omitted |
 
 ### Stellar / Soroban - Network
 
@@ -86,6 +144,56 @@ cp akkuea-defi-rwa/apps/api/.env.example akkuea-defi-rwa/apps/api/.env
 
 ---
 
+### Webapp - Pilot Dashboard
+
+Read by `apps/webapp` in the browser, so every variable here is public by
+design. None of them is a secret, and none should ever hold one.
+
+Contract IDs are optional overrides: with all three empty, the dashboard reads
+the committed deployment artifacts in `apps/shared/src/contracts.<network>.json`,
+which is the normal case. Set them only to point a local dashboard at a custom
+deployment. See `docs/deployment/deploy-pilot-contracts.md`.
+
+| Variable                                     | Example Value                         | Required | Description                                                                                                                                         |
+| -------------------------------------------- | ------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_STELLAR_NETWORK`                | `testnet`                             | No       | Network the pilot dashboard reads from. `testnet` (default) or `mainnet`                                                                            |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL`                | `https://soroban-testnet.stellar.org` | No       | Soroban RPC override. Defaults to the public endpoint for the selected network                                                                      |
+| `NEXT_PUBLIC_PILOT_PAYOUT_SPLIT_CONTRACT_ID` | `CXXX...` (56 chars, starts with `C`) | No       | Overrides the payout-split contract ID from the deployment artifact                                                                                 |
+| `NEXT_PUBLIC_PILOT_INCOME_TOKEN_CONTRACT_ID` | `CXXX...` (56 chars, starts with `C`) | No       | Overrides the income token contract ID from the deployment artifact                                                                                 |
+| `NEXT_PUBLIC_PILOT_WHITELIST_CONTRACT_ID`    | `CXXX...` (56 chars, starts with `C`) | No       | Overrides the whitelist contract ID from the deployment artifact                                                                                    |
+| `NEXT_PUBLIC_PILOT_START_CYCLE`              | `2026-01`                             | No       | First income cycle the dashboard reports on, as `YYYY-MM`. Cycles are enumerated from here to the current month. Defaults to `2026-01`              |
+| `NEXT_PUBLIC_PILOT_PAYMENT_DAY`              | `5`                                   | No       | Day of the month, in the month after the cycle, that the ally's income is due. A term of the ally's agreement, not a software constant. Default `5` |
+| `NEXT_PUBLIC_PILOT_PROPERTY_SPLAT_URL`       | `https://example.org/property.splat`  | No       | Gaussian splat capture of the ally's property, shown in the investor view. Absent renders a documented empty state                                  |
+
+---
+
+### Webapp - Property Images
+
+Read by `apps/webapp/next.config.ts` to build the `next/image`
+`images.remotePatterns` allowlist. The API accepts any image URL for a
+property, but `next/image` refuses to load from a host that is not on this
+list, so every host that serves property images in a given deployment must be
+listed here. Each entry becomes an `https`-only pattern; `http` image URLs are
+never allowed.
+
+Format: a comma-separated list of bare hostnames. Whitespace around entries is
+trimmed and empty entries are dropped. An entry must not include a protocol,
+port, path, or inner spaces, so `cdn.example.com` is valid while
+`https://cdn.example.com`, `cdn.example.com:8443`, and `cdn.example.com/img` are
+rejected. The list is validated at boot by `webappEnvSchema`
+(`apps/shared/src/env/schemas.ts`), which fails startup with the offending
+entries named. When the variable is unset or empty, the default applies.
+
+A property with no images, or whose image fails to load, shows the bundled
+placeholder at `apps/webapp/public/images/property-placeholder.svg`, which is
+served locally and needs no entry here.
+
+| Variable                           | Example Value                            | Required                            | Description                                                                                   |
+| ---------------------------------- | ---------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_PROPERTY_IMAGE_HOSTS` | `images.unsplash.com,res.cloudinary.com` | No (default: `images.unsplash.com`) | Hosts `next/image` may load property images from over `https`. Changing it requires a rebuild |
+
+---
+
 ## Network Passphrase Reference
 
 | Network            | `STELLAR_NETWORK_PASSPHRASE`                     |
@@ -110,4 +218,6 @@ Before going live, verify:
 - [ ] `OPERATIONS_BACKEND_CREDENTIAL` is a fresh random value (not the example placeholder)
 - [ ] `OPERATIONS_ALLOWED_WALLETS` contains only authorized production admin addresses
 - [ ] `KYC_UPLOAD_DIR` exists on the server and is not publicly accessible
+- [ ] `TRUSTED_PROXY_HOPS` matches the number of proxies in front of the API (`0` if the API is reached directly)
+- [ ] `REDIS_URL` is set if the API runs more than one instance, so rate limits are shared
 - [ ] `.env` file is in `.gitignore` (verify with `git check-ignore -v apps/api/.env`)

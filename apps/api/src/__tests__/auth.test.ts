@@ -6,7 +6,7 @@ import { jwt } from '@elysiajs/jwt';
 import { spyOn } from 'bun:test';
 import { userRepository } from '../repositories/UserRepository';
 import { errorHandler } from '../middleware/errorHandler';
-import { challengeStore } from '../controllers/AuthController';
+import { challengeStore, sweepExpiredChallenges } from '../controllers/AuthController';
 
 describe('Auth Routes Integration Tests', () => {
   const app = new Elysia()
@@ -76,7 +76,7 @@ describe('Auth Routes Integration Tests', () => {
 
     // 2. Sign challenge
     const signatureBuffer = keypair.sign(Buffer.from(nonce));
-    const signature = signatureBuffer.toString('base64');
+    const signature = Buffer.from(signatureBuffer).toString('base64');
 
     // 3. Verify session
     const sessionRes = await app.handle(
@@ -108,7 +108,7 @@ describe('Auth Routes Integration Tests', () => {
     // 2. Sign with a DIFFERENT key
     const badKeypair = Keypair.random();
     const badSignatureBuffer = badKeypair.sign(Buffer.from(nonce));
-    const badSignature = badSignatureBuffer.toString('base64');
+    const badSignature = Buffer.from(badSignatureBuffer).toString('base64');
 
     // 3. Verify session
     const sessionRes = await app.handle(
@@ -124,7 +124,7 @@ describe('Auth Routes Integration Tests', () => {
 
   it('POST /auth/session should reject request without a challenge', async () => {
     const signatureBuffer = keypair.sign(Buffer.from('fake-nonce'));
-    const signature = signatureBuffer.toString('base64');
+    const signature = Buffer.from(signatureBuffer).toString('base64');
 
     const sessionRes = await app.handle(
       new Request('http://localhost/auth/session', {
@@ -153,7 +153,7 @@ describe('Auth Routes Integration Tests', () => {
 
     // 3. Sign the nonce with the correct key
     const signatureBuffer = keypair.sign(Buffer.from(nonce));
-    const signature = signatureBuffer.toString('base64');
+    const signature = Buffer.from(signatureBuffer).toString('base64');
 
     // 4. Attempt to create session - should reject as expired
     const sessionRes = await app.handle(
@@ -182,7 +182,7 @@ describe('Auth Routes Integration Tests', () => {
 
     // 2. Sign and verify (first use - should succeed)
     const signatureBuffer = keypair.sign(Buffer.from(nonce));
-    const signature = signatureBuffer.toString('base64');
+    const signature = Buffer.from(signatureBuffer).toString('base64');
 
     const firstRes = await app.handle(
       new Request('http://localhost/auth/session', {
@@ -217,5 +217,52 @@ describe('Auth Routes Integration Tests', () => {
     );
 
     expect(sessionRes.status).toBe(400);
+  });
+
+  it('POST /auth/session should reject a signature longer than a base64 Ed25519 signature', async () => {
+    const oversizedSignature = 'A'.repeat(200);
+
+    const sessionRes = await app.handle(
+      new Request('http://localhost/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stellarAddress, signature: oversizedSignature }),
+      }),
+    );
+
+    expect(sessionRes.status).toBe(400);
+  });
+
+  it('challenge store shrinks after expiry via sweepExpiredChallenges (fake clock)', () => {
+    const fakeNow = Date.now();
+    challengeStore.set('EXPIRED_ADDRESS', { nonce: 'expired-nonce', expiresAt: fakeNow - 1000 });
+    challengeStore.set('VALID_ADDRESS', { nonce: 'valid-nonce', expiresAt: fakeNow + 1000 });
+    expect(challengeStore.size).toBe(2);
+
+    const removed = sweepExpiredChallenges(fakeNow);
+
+    expect(removed).toBe(1);
+    expect(challengeStore.size).toBe(1);
+    expect(challengeStore.has('EXPIRED_ADDRESS')).toBe(false);
+    expect(challengeStore.has('VALID_ADDRESS')).toBe(true);
+  });
+
+  it('POST /auth/challenge should reject a new address once the outstanding challenge cap is reached', async () => {
+    const now = Date.now();
+    for (let i = 0; i < 10_000; i++) {
+      challengeStore.set(`synthetic-address-${i}`, { nonce: 'synthetic', expiresAt: now + 60_000 });
+    }
+
+    const response = await app.handle(
+      new Request('http://localhost/auth/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stellarAddress }),
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('TOO_MANY_CHALLENGES');
   });
 });

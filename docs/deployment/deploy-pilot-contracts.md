@@ -1,0 +1,409 @@
+# Pilot Contract Deployment Guide
+
+This guide covers deployment of the Cycle 6 pilot contract set:
+`pilot-whitelist`, `pilot-income-token`, and `pilot-payout-split`.
+
+**Contract sources:**
+
+- `apps/contracts/contracts/pilot-whitelist/src/lib.rs`
+- `apps/contracts/contracts/pilot-income-token/src/lib.rs`
+- `apps/contracts/contracts/pilot-payout-split/src/lib.rs`
+
+**Output WASM files:**
+
+- `apps/contracts/target/wasm32v1-none/release/pilot_whitelist.wasm`
+- `apps/contracts/target/wasm32v1-none/release/pilot_income_token.wasm`
+- `apps/contracts/target/wasm32v1-none/release/pilot_payout_split.wasm`
+
+**Runtime:** Stellar Soroban.
+
+---
+
+## Architecture Overview
+
+The pilot is intentionally independent from `defi-rwa`.
+
+```text
+pilot-whitelist
+  stores approved/not-approved investor addresses
+
+pilot-income-token
+  mints a fixed, non-transferable income-participation supply
+  reads pilot-whitelist at mint time
+
+pilot-payout-split
+  stores monthly evidence hash/link records with a review status
+  requires operator + ally auth to approve income cycles
+  distributes USDC: 10% platform fee, 90% pro-rata to token holders
+  reads pilot-income-token and pilot-whitelist at payout time
+  one-way exit state (operator + ally): permanently blocks evidence
+  recording and distribution; exit_status() exposes reason and timestamp
+```
+
+The pilot also carries a terminal wind-down marker on `pilot-income-token`
+(`mark_wound_down`, admin-only, one-way; `wound_down_status()` to read it),
+mirroring the payout-split exit state so either contract can be read
+independently for a consistent picture. No fund-recovery or unwind logic
+exists in either contract; that question remains open (Known Risk #5 in the
+product brief).
+
+Like `record_evidence` and `execute_distribution`, `exit` requires operator +
+ally auth. **In production, use the pilot webapp's co-signing flow** (operator
+UI in `ExitCosignPanel.tsx`), which requires an explicit confirmation step
+before it will even build the transaction, since this call is permanent and
+irreversible. The CLI equivalent is
+`stellar contract invoke --id $PILOT_PAYOUT_SPLIT ... -- exit --operator $OPERATOR_ADDRESS --ally $ALLY_ADDRESS --reason "..."`,
+kept only as a scripted-deployment and local-testing fallback.
+
+All three contracts carry an independent two-step admin transfer
+(`transfer_admin_start` / `transfer_admin_accept` / `transfer_admin_cancel`)
+and a reversible, admin-gated `pause` / `unpause` / `is_paused`. Neither is
+enumerated further here; see
+[`docs/operations/runbook-pilot-admin-rotation.md`](../operations/runbook-pilot-admin-rotation.md)
+and
+[`docs/operations/runbook-pilot-emergency-pause.md`](../operations/runbook-pilot-emergency-pause.md).
+The contracts are immutable (no upgrade entry point); recovering from a
+contract-level bug means migrating to a new deployment, covered in
+[`docs/operations/runbook-pilot-contract-migration.md`](../operations/runbook-pilot-contract-migration.md).
+The reasoning behind both decisions is recorded in
+[`docs/strategy/decision-log.md`](../strategy/decision-log.md).
+
+Each cycle's evidence carries an on-chain review status, which is what the
+pilot dashboard renders:
+
+```text
+(no record)  ally has not reported this cycle
+Submitted    ally submitted, waiting on the operator
+UnderReview  operator opened the cycle
+Approved     operator approved, distribution can execute
+Rejected     operator rejected with a reason, ally may submit again
+Disputed     admin or operator flagged a problem, distribution blocked
+```
+
+Only an `Approved` cycle can be distributed. The co-signed `record_evidence`
+path lands directly on `Approved`, because both required signers authorized the
+same invocation.
+
+The deployment order is mandatory:
+
+```text
+pilot-whitelist
+  |
+  v
+pilot-income-token
+  |
+  v
+pilot-payout-split
+```
+
+---
+
+## Prerequisites
+
+```bash
+rustup target add wasm32v1-none
+stellar --version
+```
+
+For testnet, have one funded deployer identity:
+
+```bash
+stellar keys generate pilot-deployer --network testnet --fund
+stellar keys address pilot-deployer
+```
+
+You also need:
+
+- Operator public address.
+- Ally public address. It must be distinct from the operator address.
+- Platform fee recipient public address.
+- USDC SAC contract ID for the target network.
+- EURC asset contract ID for the target network, offered as the settlement
+  alternative.
+- Verified Soroswap AMM router contract ID used to convert USDC shares at
+  payout time. The USDC, EURC, and router contract IDs must be pairwise
+  distinct; `initialize` rejects any two that match with
+  `RouterNotConfigured`.
+
+Never commit secret keys or `.env` files.
+
+---
+
+## Step 1 - Build
+
+```bash
+cd apps/contracts
+stellar contract build
+```
+
+Verify the three WASM outputs exist:
+
+```bash
+ls -lh target/wasm32v1-none/release/pilot_whitelist.wasm
+ls -lh target/wasm32v1-none/release/pilot_income_token.wasm
+ls -lh target/wasm32v1-none/release/pilot_payout_split.wasm
+```
+
+---
+
+## Step 2 - Deploy And Initialize
+
+Use the helper script from the repository root:
+
+```bash
+./scripts/deploy-pilot-contracts.sh \
+  testnet \
+  pilot-deployer \
+  $OPERATOR_ADDRESS \
+  $ALLY_ADDRESS \
+  $PLATFORM_FEE_RECIPIENT \
+  $USDC_TOKEN_CONTRACT_ID \
+  $EURC_TOKEN_CONTRACT_ID \
+  $SWAP_ROUTER_CONTRACT_ID
+```
+
+The script:
+
+1. Builds with `stellar contract build`.
+2. Deploys all three WASMs.
+3. Initializes `pilot-whitelist` with the deployer as admin.
+4. Initializes `pilot-income-token` with the whitelist contract ID.
+5. Initializes `pilot-payout-split` with admin, operator, ally, fee recipient, income token, whitelist, USDC, EURC, and swap router contract IDs.
+
+---
+
+## Step 3 - Verify Contract Health
+
+Check the whitelist admin:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_WHITELIST \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- admin
+```
+
+Check token metadata:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_INCOME_TOKEN \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- name
+
+stellar contract invoke \
+  --id $PILOT_INCOME_TOKEN \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- total_supply
+```
+
+Check payout state:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- is_paused
+
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- eurc_swap_path_status
+```
+
+Expected:
+
+- `is_paused` returns `false`.
+- `eurc_swap_path_status` returns the configured `swap_router`, `usdc_token`, and `eurc_token` contract IDs.
+
+---
+
+## Step 4 - Approve Investors And Mint Fixed Supply
+
+Approve each investor on the whitelist:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_WHITELIST \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- approve \
+  --admin $ADMIN_ADDRESS \
+  --address $INVESTOR_ADDRESS
+```
+
+Mint once to the approved holder set:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_INCOME_TOKEN \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- mint_fixed_supply \
+  --admin $ADMIN_ADDRESS \
+  --holders '["G...","G...","G...","G...","G..."]' \
+  --amounts '[100,250,400,750,1500]'
+```
+
+The mint is one-time only. If a mistake is made, redeploy for testnet or use the admin-only correction transfer according to the operational decision for that test cycle.
+
+---
+
+## Step 5 - Record Evidence
+
+Both the operator and ally must authorize `record_evidence`. **In production, use the pilot webapp's co-signing flow** (`apps/webapp/src/services/pilot/cosign.ts`, operator UI in `RecordEvidenceCosignPanel.tsx`): the operator prepares the invocation, shares it with the ally, the ally reviews and signs their own auth entry from a separate wallet session, and the operator finalizes and submits. Neither party hand-assembles a transaction. The manual CLI invocation below remains as a fallback for scripted deployments and local testing, where both signing keys are already on the same machine.
+
+```bash
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- record_evidence \
+  --operator $OPERATOR_ADDRESS \
+  --ally $ALLY_ADDRESS \
+  --cycle_id "2026-08" \
+  --evidence_hash <32-byte-hash> \
+  --evidence_link "ipfs://..." \
+  --total_income 10000000
+```
+
+The contract stores only the hash and link, never the underlying file.
+
+A cycle recorded this way lands with status `Approved`, because both required
+signers authorized the same invocation.
+
+### Reviewed path (used by the pilot dashboard)
+
+The dashboard splits the same outcome into steps a person can follow, so an
+investor can see that a human reviewed the evidence rather than being asked to
+take the result on trust. The ally signs alone, the operator reviews, and only
+an `Approved` cycle can be distributed.
+
+```bash
+# 1. The ally submits. Status becomes Submitted.
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-ally \
+  --network testnet \
+  -- submit_evidence \
+  --ally $ALLY_ADDRESS \
+  --cycle_id "2026-08" \
+  --evidence_hash <32-byte-hash> \
+  --evidence_link "ipfs://..." \
+  --total_income 10000000
+
+# 2. Optional: the operator opens it, so the ally sees it was picked up.
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-operator \
+  --network testnet \
+  -- start_review \
+  --operator $OPERATOR_ADDRESS \
+  --cycle_id "2026-08"
+
+# 3. The operator approves, or rejects with a reason the ally can act on.
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-operator \
+  --network testnet \
+  -- review_evidence \
+  --operator $OPERATOR_ADDRESS \
+  --cycle_id "2026-08" \
+  --approved true \
+  --reason "Bank statement matches the reported amount"
+```
+
+A rejected cycle can be corrected and submitted again. The admin or the
+operator can also call `flag_dispute` with a reason, which blocks distribution
+and shows as `Disputed` in the investor timeline.
+
+---
+
+## Step 6 - Fund And Execute Distribution
+
+Fund the payout-split contract with at least `total_income` USDC before execution.
+
+`execute_distribution` is also dual-signed by the operator and ally. **In production, use the pilot webapp's co-signing flow** (operator UI in `DistributionCosignPanel.tsx`), the same way as `record_evidence` in Step 5: both parties see a summary decoded from the actual invocation, including the live EURC price floor, before either signs. The CLI invocation below is the fallback path.
+
+Then execute:
+
+```bash
+stellar contract invoke \
+  --id $PILOT_PAYOUT_SPLIT \
+  --source-account pilot-deployer \
+  --network testnet \
+  -- execute_distribution \
+  --cycle_id "2026-08"
+```
+
+The contract:
+
+- Sends 10% to `platform_fee_recipient`.
+- Sends 90% pro-rata to current income token holders.
+- Rejects any holder no longer approved in the whitelist.
+- Marks the cycle distributed so it cannot execute twice.
+
+Integer pro-rata dust remains in the payout contract and is reported in the returned `DistributionSummary`.
+
+The checked invocation-budget test covers `execute_distribution` with 10 holders. Larger holder sets should be tested before mainnet if the pilot cap increases.
+
+---
+
+## Step 7 - Record Deployment Artifacts
+
+Update `apps/shared/src/contracts.testnet.json`:
+
+```json
+{
+  "contracts": {
+    "PILOT_WHITELIST": "C...",
+    "PILOT_INCOME_TOKEN": "C...",
+    "PILOT_PAYOUT_SPLIT": "C..."
+  }
+}
+```
+
+Also add the deployment table to `docs/contracts/deployment.md` with:
+
+- Network and passphrase.
+- Deployer/admin account.
+- Contract IDs.
+- Deploy/init transaction hashes when available.
+- Stellar Expert links.
+
+---
+
+## Troubleshooting
+
+| Error                                                           | Cause                                                                                                    | Fix                                                                                |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `InvalidEvidenceHash`                                           | Evidence hash is not exactly 32 bytes                                                                    | Hash the retained evidence file with a 32-byte digest and submit that value        |
+| `ZeroAmount`                                                    | `total_income` is zero or negative                                                                       | Submit a positive USDC amount                                                      |
+| `CycleAlreadyRecorded`                                          | Evidence already exists for the cycle                                                                    | Use a new cycle ID or redeploy in testnet                                          |
+| `CycleAlreadyDistributed`                                       | Distribution was already executed                                                                        | Do not retry the same cycle                                                        |
+| `RecipientNotApproved`                                          | A token holder is no longer whitelisted                                                                  | Resolve the whitelist status before payout                                         |
+| `InsufficientPayoutBalance`                                     | Payout contract lacks USDC                                                                               | Fund the payout contract with at least `total_income`                              |
+| `ContractPaused`                                                | Admin paused the payout contract                                                                         | Investigate and unpause only after the incident is resolved                        |
+| `SignerCollision`                                               | Operator and ally are the same address                                                                   | Re-initialize a fresh deployment with distinct signer addresses                    |
+| `RouterNotConfigured`                                           | USDC, EURC, and swap router contract IDs are not pairwise distinct                                       | Pass three distinct contract IDs for `usdc_token`, `eurc_token`, and `swap_router` |
+| `Authorization failed`                                          | Operator and ally did not both sign                                                                      | Rebuild the transaction with both required Soroban auth entries                    |
+| `EvidenceNotApproved`                                           | Cycle is not in the `Approved` status                                                                    | Review the cycle first, or resolve the rejection or dispute behind it              |
+| `InvalidStatusTransition`                                       | Review requested on a settled cycle                                                                      | Only `Submitted` or `UnderReview` cycles can be reviewed                           |
+| `MissingReviewReason`                                           | Rejection or dispute sent with no reason                                                                 | Supply a reason: the contract will not record one without it                       |
+| `EvidenceNotFound`                                              | No evidence exists for the cycle                                                                         | The ally must submit the cycle before it can be reviewed                           |
+| `NotPendingAdmin`                                               | `transfer_admin_accept` called by the wrong address, or no transfer is pending                           | See `docs/operations/runbook-pilot-admin-rotation.md`                              |
+| `ContractPaused` (on `pilot-whitelist` or `pilot-income-token`) | `approve`/`revoke`/`mint_fixed_supply`/`transfer`/`mark_wound_down` called while that contract is paused | See `docs/operations/runbook-pilot-emergency-pause.md`                             |
+
+---
+
+## See also
+
+- [`docs/operations/runbook-pilot-admin-rotation.md`](../operations/runbook-pilot-admin-rotation.md)
+- [`docs/operations/runbook-pilot-emergency-pause.md`](../operations/runbook-pilot-emergency-pause.md)
+- [`docs/operations/runbook-pilot-contract-migration.md`](../operations/runbook-pilot-contract-migration.md)
+- [`docs/strategy/decision-log.md`](../strategy/decision-log.md)

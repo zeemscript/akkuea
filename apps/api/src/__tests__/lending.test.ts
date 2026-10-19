@@ -4,7 +4,7 @@ import { lendingRoutes } from '../routes/lending';
 import { errorHandler } from '../middleware/errorHandler';
 import { CreatePoolDto, DepositDto, WithdrawDto, BorrowDto, RepayDto } from '../dto/lending.dto';
 import jwt from 'jsonwebtoken';
-import { VALID_STELLAR_ADDRESS, VALID_UUID } from '@real-estate-defi/shared';
+import { VALID_STELLAR_ADDRESS, VALID_UUID } from '@akkuea/shared';
 const TEST_WALLET = 'GCO5CVUVFNX4KZQMYCALTJ5QSG6USOVLFQ74AQCCX7TGJKBNZ33KC5ZC'; // Unique wallet for lending tests
 
 describe('Lending DTO Validation', () => {
@@ -365,7 +365,6 @@ describe.skipIf(!process.env.DATABASE_URL)('Lending Integration Tests (DB requir
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${testToken}`,
-          'x-test-bypass-ratelimit': 'true',
         },
         body: JSON.stringify({
           name: 'Integration Test Pool',
@@ -402,7 +401,6 @@ describe.skipIf(!process.env.DATABASE_URL)('Lending Integration Tests (DB requir
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${testToken}`,
-          'x-test-bypass-ratelimit': 'true',
         },
         body: JSON.stringify({ amount: '1000' }),
       }),
@@ -430,7 +428,6 @@ describe.skipIf(!process.env.DATABASE_URL)('Lending Integration Tests (DB requir
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${testToken}`,
-          'x-test-bypass-ratelimit': 'true',
         },
         body: JSON.stringify({
           borrowAmount: '300',
@@ -463,7 +460,6 @@ describe.skipIf(!process.env.DATABASE_URL)('Lending Integration Tests (DB requir
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${testToken}`,
-          'x-test-bypass-ratelimit': 'true',
         },
         body: JSON.stringify({ amount: '100' }),
       }),

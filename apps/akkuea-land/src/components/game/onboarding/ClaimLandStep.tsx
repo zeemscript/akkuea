@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
+import { useTranslations } from "next-intl";
 import { useGameWallet } from "@/hooks/useGameWallet";
+import { buildFaucetClaimXdr } from "@/lib/soroban-tx";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles,
@@ -13,13 +15,6 @@ import {
 
 type Status = "idle" | "pending" | "done" | "error";
 
-const STATUS_MESSAGE: Record<Status, string> = {
-  idle: "Claim 1,000 LAND",
-  pending: "Preparing your wallet on Stellar...",
-  done: "1,000 LAND Received!",
-  error: "Claim failed. Try again.",
-};
-
 export function ClaimLandStep({
   onNext,
   onSkip,
@@ -27,16 +22,28 @@ export function ClaimLandStep({
   onNext: () => void;
   onSkip: () => void;
 }) {
-  const { signAndSubmitTx } = useGameWallet();
+  const t = useTranslations("Onboarding.claimLand");
+  const { address, signAndSubmitTx } = useGameWallet();
   const [status, setStatus] = useState<Status>("idle");
 
+  const STATUS_MESSAGE: Record<Status, string> = {
+    idle: t("statusIdle"),
+    pending: t("statusPending"),
+    done: t("statusDone"),
+    error: t("statusError"),
+  };
+
   const handleClaim = async () => {
+    if (!address) {
+      setStatus("error");
+      return;
+    }
     setStatus("pending");
     try {
-      // Simulate/call transaction
-      await signAndSubmitTx("placeholder-faucet-xdr");
+      const xdr = await buildFaucetClaimXdr(address);
+      await signAndSubmitTx(xdr);
       setStatus("done");
-    } catch (err) {
+    } catch {
       setStatus("error");
     }
   };
@@ -49,7 +56,7 @@ export function ClaimLandStep({
       transition={{ duration: 0.5 }}
       className="text-center"
     >
-      <div className="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-3xl bg-indigo-950/40 border border-indigo-500/20 text-3xl shadow-xl shadow-indigo-950/20">
+      <div className="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-3xl bg-land-accent/10 border border-land-accent/20 text-3xl shadow-xl shadow-land-accent/20">
         <motion.div
           animate={status === "pending" ? { rotate: 360 } : {}}
           transition={
@@ -58,7 +65,7 @@ export function ClaimLandStep({
               : {}
           }
         >
-          <Coins className="h-10 w-10 text-indigo-400" />
+          <Coins className="h-10 w-10 text-land-accent" />
         </motion.div>
 
         {status === "done" && (
@@ -66,19 +73,18 @@ export function ClaimLandStep({
             initial={{ scale: 0 }}
             animate={{ scale: [0, 1.2, 1] }}
             transition={{ duration: 0.5 }}
-            className="absolute -top-2 -right-2 bg-emerald-500 text-white p-1.5 rounded-full shadow-lg"
+            className="absolute -top-2 -right-2 bg-land-success-fill text-land-on-accent p-1.5 rounded-full shadow-lg"
           >
             <Sparkles className="h-4 w-4" />
           </motion.div>
         )}
       </div>
 
-      <h2 className="mb-3 text-2xl font-extrabold tracking-tight text-white">
-        Get your starter LAND
+      <h2 className="mb-3 text-2xl font-extrabold tracking-tight text-land-fg">
+        {t("title")}
       </h2>
-      <p className="mb-8 text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
-        LAND is the premium utility token of Akkuea Land. Reclaim 1,000 LAND
-        from our testnet faucet for free to fund your very first property claim.
+      <p className="mb-8 text-sm text-land-fg-muted max-w-sm mx-auto leading-relaxed">
+        {t("description")}
       </p>
 
       <div className="relative min-h-[160px] flex flex-col justify-start">
@@ -91,17 +97,17 @@ export function ClaimLandStep({
               exit={{ scale: 0.9, opacity: 0 }}
               className="w-full"
             >
-              <div className="rounded-2xl bg-emerald-950/20 border border-emerald-500/30 p-5 mb-6 flex flex-col items-center">
+              <div className="rounded-2xl bg-land-success/10 border border-land-success/30 p-5 mb-6 flex flex-col items-center">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xl font-black text-emerald-400 font-mono tracking-wide">
+                  <span className="text-xl font-black text-land-success font-mono tracking-wide">
                     +1,000
                   </span>
-                  <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                  <span className="text-xs font-bold text-land-success bg-land-success/10 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                     LAND
                   </span>
                 </div>
-                <p className="text-xs text-emerald-400/80">
-                  Transaction successfully recorded on-chain
+                <p className="text-xs text-land-success/80">
+                  {t("transactionRecorded")}
                 </p>
 
                 {/* Micro sparkle floaters */}
@@ -120,13 +126,13 @@ export function ClaimLandStep({
                         duration: 1.5,
                         repeat: Infinity,
                       }}
-                      className="absolute text-emerald-400"
+                      className="absolute text-land-success"
                       style={{
                         left: `${20 + i * 15}%`,
                         top: "10%",
                       }}
                     >
-                      ✦
+                      <Sparkles size={12} />
                     </motion.div>
                   ))}
                 </div>
@@ -136,10 +142,10 @@ export function ClaimLandStep({
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={onNext}
-                className="w-full rounded-xl bg-emerald-600 py-3.5 text-sm font-bold text-white hover:bg-emerald-500 transition-all duration-200 shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                className="w-full rounded-xl bg-land-success-fill py-3.5 text-sm font-bold text-land-on-accent hover:bg-land-success-fill/90 transition-all duration-200 shadow-lg shadow-land-success-fill/20 flex items-center justify-center gap-2"
               >
-                Continue to Claim Property
-                <ArrowRight size={16} />
+                {t("continueButton")}
+                <ArrowRight size={16} aria-hidden="true" />
               </motion.button>
             </motion.div>
           ) : (
@@ -159,16 +165,20 @@ export function ClaimLandStep({
                 }
                 onClick={handleClaim}
                 disabled={status === "pending"}
-                className={`w-full rounded-xl py-3.5 text-sm font-bold text-white transition-all duration-200 flex items-center justify-center gap-2 shadow-lg ${
+                className={`w-full rounded-xl py-3.5 text-sm font-bold transition-all duration-200 flex items-center justify-center gap-2 shadow-lg ${
                   status === "pending"
-                    ? "bg-slate-800 border border-slate-700/60 text-slate-400 cursor-not-allowed"
+                    ? "bg-land-surface-raised border border-land-border-hover/60 text-land-fg-muted cursor-not-allowed"
                     : status === "error"
-                      ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/10"
-                      : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20"
+                      ? "bg-land-danger-fill hover:bg-land-danger-fill/90 text-land-on-accent shadow-land-danger-fill/10"
+                      : "bg-land-accent-fill hover:bg-land-accent-fill/90 text-land-on-accent shadow-land-accent-fill/20"
                 }`}
               >
                 {status === "pending" && (
-                  <RefreshCw size={14} className="animate-spin" />
+                  <RefreshCw
+                    size={14}
+                    className="animate-spin"
+                    aria-hidden="true"
+                  />
                 )}
                 {STATUS_MESSAGE[status]}
               </motion.button>
@@ -177,28 +187,25 @@ export function ClaimLandStep({
                 <motion.p
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="text-xs text-indigo-400/80 animate-pulse"
+                  className="text-xs text-land-accent/80 animate-pulse"
                 >
-                  Confirming with sponsored transaction fee...
+                  {t("confirmingFee")}
                 </motion.p>
               )}
 
               {status === "error" && (
-                <div className="flex items-center justify-center gap-1.5 text-xs text-rose-400">
-                  <AlertCircle size={14} />
-                  <span>
-                    Transaction failed. Please make sure you have internet
-                    access.
-                  </span>
+                <div className="flex items-center justify-center gap-1.5 text-xs text-land-danger">
+                  <AlertCircle size={14} aria-hidden="true" />
+                  <span>{t("transactionFailed")}</span>
                 </div>
               )}
 
               {(status === "idle" || status === "error") && (
                 <button
                   onClick={onSkip}
-                  className="w-full text-xs text-slate-400 hover:text-white transition duration-150 uppercase tracking-wider font-semibold"
+                  className="w-full text-xs text-land-fg-muted hover:text-land-fg transition duration-150 uppercase tracking-wider font-semibold"
                 >
-                  Skip this step
+                  {t("skipStep")}
                 </button>
               )}
             </motion.div>

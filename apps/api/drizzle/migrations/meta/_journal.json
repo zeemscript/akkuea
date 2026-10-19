@@ -43,6 +43,48 @@
       "when": 1777449700000,
       "tag": "0005_expand_valuation_confidence",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777449700001,
+      "tag": "0006_add_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1753714873000,
+      "tag": "0007_add_kyc_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777449700002,
+      "tag": "0008_idempotency_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777449700003,
+      "tag": "0009_treasury_track",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787217575314,
+      "tag": "0010_empty_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787753708507,
+      "tag": "0011_bored_colonel_america",
+      "breakpoints": true
     }
   ]
 }

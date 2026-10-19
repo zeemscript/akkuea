@@ -5,15 +5,19 @@ on:
     branches: [ main, develop ]
     paths:
       - 'apps/api/**'
+      - 'package.json'
+      - 'bun.lock'
       - '.github/workflows/api-ci.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'apps/api/**'
+      - 'package.json'
+      - 'bun.lock'
       - '.github/workflows/api-ci.yml'
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '24'
   BUN_VERSION: '1.x'
 
 jobs:
@@ -23,7 +27,7 @@ jobs:
     
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -38,10 +42,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ env.BUN_VERSION }}
         
@@ -68,6 +72,26 @@ jobs:
         cd apps/api
         bun run build
 
+    - name: Wait for the target database to accept real connections
+      # The service container's `pg_isready` healthcheck reports the server
+      # ready as soon as it accepts any TCP connection, which can be before
+      # the `POSTGRES_DB`/`POSTGRES_USER` the entrypoint provisions are fully
+      # usable. Migrating or testing against that half-ready window has
+      # intermittently failed downstream (e.g. auth role errors, permission
+      # checks reading back inconsistent rows). Poll with the actual
+      # credentials and database name before proceeding.
+      run: |
+        for i in $(seq 1 30); do
+          if PGPASSWORD=test psql -h localhost -U test -d akkuea_test -c 'SELECT 1' > /dev/null 2>&1; then
+            echo "Database is ready"
+            exit 0
+          fi
+          echo "Waiting for the database to be ready ($i/30)..."
+          sleep 2
+        done
+        echo "Database did not become ready in time"
+        exit 1
+
     - name: Run database migrations
       env:
         DATABASE_URL: postgresql://test:test@localhost:5432/akkuea_test
@@ -81,8 +105,15 @@ jobs:
         TEST_DATABASE_URL: postgresql://test:test@localhost:5432/akkuea_test
       run: |
         cd apps/api
-        # Run tests sequentially to avoid database race conditions in the shared service container
-        bun test --coverage --coverage-threshold=60 --max-concurrency=1
+        # --isolate: confirmed by diagnostic runs that the E2E tokenization
+        # suite (src/__tests__/e2e.fullflow.test.ts) passes on its own but
+        # fails in the full run; some other file leaks module-level state
+        # (most likely a monkey-patched StellarService singleton method left
+        # unrestored) into it. --isolate gives every file its own global and
+        # module registry, closing that class of leak at the source instead
+        # of hunting down the one leaking file. --max-concurrency=1 stays for
+        # the shared database service container.
+        bun test --coverage --coverage-threshold=60 --max-concurrency=1 --isolate
 
   security-audit:
     name: Security Audit
@@ -90,24 +121,17 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       
     - name: Install dependencies
       run: |
         bun install --frozen-lockfile
 
     - name: Audit dependencies
-      run: |
-        cd apps/api
-
-        # Check for high/critical vulnerabilities in dependencies
-        # Note: Known transitive vulnerabilities in minimatch (via eslint) and axios
-        # (via stellar-sdk/soroban-client) cannot be fixed without upstream updates.
-        # Using continue-on-error to avoid blocking PRs on transitive dependency issues.
-        bun audit --audit-level=high || echo "Audit found vulnerabilities in transitive dependencies (see above)"
+      run: bash .github/scripts/dependency-audit.sh .
 
   code-quality:
     name: Code Quality
@@ -115,10 +139,10 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       
     - name: Install dependencies
       run: |

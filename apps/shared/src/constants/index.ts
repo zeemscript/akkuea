@@ -2,8 +2,8 @@
 // hard-coded here. These files are updated by the deploy pipeline (see
 // docs/contracts/deployment.md), not by the build, so application code can stay
 // untouched when contracts are (re)deployed.
-import testnetContracts from "../contracts.testnet.json";
-import mainnetContracts from "../contracts.mainnet.json";
+import testnetContracts from "../contracts.testnet.json" with { type: "json" };
+import mainnetContracts from "../contracts.mainnet.json" with { type: "json" };
 
 export const STELLAR_NETWORKS = {
   MAINNET: "public",
@@ -25,6 +25,22 @@ export const CONTRACT_IDS = {
   DEFI_LENDING: {
     TESTNET: testnetContracts.contracts.DEFI_LENDING,
     MAINNET: mainnetContracts.DEFI_LENDING,
+  },
+  PILOT_WHITELIST: {
+    TESTNET: testnetContracts.contracts.PILOT_WHITELIST,
+    MAINNET: mainnetContracts.PILOT_WHITELIST,
+  },
+  PILOT_INCOME_TOKEN: {
+    TESTNET: testnetContracts.contracts.PILOT_INCOME_TOKEN,
+    MAINNET: mainnetContracts.PILOT_INCOME_TOKEN,
+  },
+  PILOT_PAYOUT_SPLIT: {
+    TESTNET: testnetContracts.contracts.PILOT_PAYOUT_SPLIT,
+    MAINNET: mainnetContracts.PILOT_PAYOUT_SPLIT,
+  },
+  USDC_TOKEN: {
+    TESTNET: testnetContracts.contracts.USDC_TOKEN,
+    MAINNET: mainnetContracts.USDC_TOKEN,
   },
 } as const;
 

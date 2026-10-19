@@ -1,4 +1,4 @@
-import type { PositionHealth, LiquidationReadiness } from '@real-estate-defi/shared';
+import type { PositionHealth, LiquidationReadiness } from '@akkuea/shared';
 import type { BorrowPosition } from '../db/schema';
 import { RiskMonitoringService } from '../services/RiskMonitoringService';
 import { lendingRepository } from '../repositories/LendingRepository';
@@ -60,6 +60,17 @@ export class RiskMonitoringController {
 
   static async getRiskTransitions(positionId?: string) {
     return this.service.getTransitions(positionId);
+  }
+
+  static async getCollateralRatioHistory(
+    positionId: string,
+    startDateStr?: string,
+    endDateStr?: string,
+  ) {
+    const startDate = startDateStr ? new Date(startDateStr) : undefined;
+    const endDate = endDateStr ? new Date(endDateStr) : undefined;
+
+    return this.service.getCollateralRatioHistory(positionId, startDate, endDate);
   }
 
   private static async getAllBorrowPositions(): Promise<BorrowPosition[]> {

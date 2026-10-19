@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 import {
@@ -8,6 +9,7 @@ import {
   BuildingLevel,
   PropertyOwnershipState,
 } from "../../../types/game.types";
+import { TREASURY_ADDRESS } from "@/lib/soroban-tx";
 
 import { EmptyPanel } from "./EmptyPanel";
 import { NotConnectedPanel } from "./NotConnectedPanel";
@@ -44,7 +46,7 @@ export const getOwnershipState = (
   }
   const isTreasury =
     !property.owner ||
-    property.owner === "GBTREASURY" ||
+    property.owner === TREASURY_ADDRESS ||
     property.owner.toLowerCase() === "treasury" ||
     property.owner.toLowerCase() === "system";
   if (isTreasury) {
@@ -56,6 +58,9 @@ export const getOwnershipState = (
   return { type: "listed_by_other", property, viewerAddress };
 };
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   property,
   onPropertyUpdate,
@@ -65,8 +70,11 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   onClose,
   buildingLevel: buildingLevelProp,
 }) => {
+  const t = useTranslations("PropertyPanel");
   const [copied, setCopied] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -76,6 +84,49 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Focus management: move focus into the panel when it opens, and return it
+  // to whatever triggered it (typically a city map tile) when it closes.
+  useEffect(() => {
+    if (property) {
+      previouslyFocusedRef.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      panelRef.current?.focus();
+    } else {
+      previouslyFocusedRef.current?.focus();
+      previouslyFocusedRef.current = null;
+    }
+  }, [property]);
+
+  const handlePanelKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+
+      const focusable = Array.from(
+        panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    },
+    [onClose],
+  );
 
   const copyToClipboard = () => {
     if (!property?.owner) return;
@@ -172,13 +223,17 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
       {property && (
         <motion.div
           key="property-panel"
+          ref={panelRef}
           role="dialog"
-          aria-label="Property details"
+          aria-modal="true"
+          aria-label={t("dialogLabel")}
+          tabIndex={-1}
+          onKeyDown={handlePanelKeyDown}
           variants={isMobile ? bottomSheetVariants : sidebarVariants}
           initial="hidden"
           animate="visible"
           exit="exit"
-          className={`fixed z-50 bg-slate-950/95 border-slate-800/90 text-white shadow-2xl flex flex-col font-sans backdrop-blur-xl ${
+          className={`fixed z-50 bg-land-bg/95 border-land-border/90 text-land-fg shadow-2xl flex flex-col font-game backdrop-blur-xl focus:outline-none ${
             isMobile
               ? "bottom-0 left-0 right-0 h-[70vh] rounded-t-[2.5rem] border-t"
               : "right-0 top-0 bottom-0 h-full w-80 border-l"
@@ -186,22 +241,23 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
         >
           {isMobile && (
             <div className="w-full flex justify-center py-3.5">
-              <div className="w-12 h-1 bg-slate-800 rounded-full" />
+              <div className="w-12 h-1 bg-land-surface-raised rounded-full" />
             </div>
           )}
 
-          <div className="flex justify-between items-center px-5 py-4 border-b border-slate-900/60 shrink-0">
+          <div className="flex justify-between items-center px-5 py-4 border-b border-land-border/60 shrink-0">
             <div className="flex items-center gap-2.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
-              <h2 className="text-sm font-bold tracking-wide uppercase text-slate-200">
-                Land Details
+              <div className="w-2.5 h-2.5 rounded-full bg-land-accent animate-pulse" />
+              <h2 className="text-sm font-bold tracking-wide uppercase text-land-fg">
+                {t("landDetailsTitle")}
               </h2>
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-all duration-200"
+              aria-label={t("closeLabel")}
+              className="p-1.5 rounded-full bg-land-surface hover:bg-land-surface-raised border border-land-border text-land-fg-muted hover:text-land-fg transition-all duration-200"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 

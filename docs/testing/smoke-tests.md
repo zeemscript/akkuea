@@ -36,7 +36,7 @@ import {
   NON_EXISTENT_UUID,
   BASE_DATE,
   VALID_TX_HASH,
-} from "@real-estate-defi/shared";
+} from "@akkuea/shared";
 ```
 
 These replace locally-duplicated values like `const VALID_STELLAR_ADDRESS = "G..."` that appear across test files.
@@ -46,11 +46,7 @@ These replace locally-duplicated values like `const VALID_STELLAR_ADDRESS = "G..
 Each factory returns a schema-compliant object with realistic defaults and accepts `Partial<T>` overrides:
 
 ```ts
-import {
-  createUser,
-  createProperty,
-  createLendingPool,
-} from "@real-estate-defi/shared";
+import { createUser, createProperty, createLendingPool } from "@akkuea/shared";
 
 // Defaults - approved KYC user with Miami address
 const user = createUser();
@@ -88,7 +84,7 @@ import {
   MIAMI_PROPERTY_SCENARIO,
   USDC_LENDING_SCENARIO,
   USER_ONBOARDING_SCENARIO,
-} from "@real-estate-defi/shared";
+} from "@akkuea/shared";
 
 // Miami property with owner, 3 investors, and purchase transactions
 const { owner, property, investors, transactions } = MIAMI_PROPERTY_SCENARIO;
@@ -105,7 +101,7 @@ const { newUser, pendingUser, verifiedUser, rejectedUser } =
 
 ```ts
 import { describe, it, expect } from "bun:test";
-import { createUser, VALID_UUID } from "@real-estate-defi/shared";
+import { createUser, VALID_UUID } from "@akkuea/shared";
 
 describe("GET /users/:id", () => {
   it("should return user data", async () => {
@@ -118,13 +114,28 @@ describe("GET /users/:id", () => {
 ## Example: Webapp component test
 
 ```ts
-import {
-  createProperty,
-  MIAMI_PROPERTY_SCENARIO,
-} from "@real-estate-defi/shared";
+import { createProperty, MIAMI_PROPERTY_SCENARIO } from "@akkuea/shared";
 
 test("PropertyCard renders price", () => {
   const property = createProperty({ totalValue: "3500000" });
   // ... render component with property, assert "$3,500,000" visible
 });
 ```
+
+## Automated smoke runner
+
+Manual unit tests (`bun test`) cover correctness. For **post-deploy** checks (app boots, DB up, public happy path), use the runnable smoke job:
+
+```bash
+# Local / dev (API on :3001)
+./scripts/smoke/run-smoke-tests.sh
+# or
+bun run smoke
+
+# Staging / production
+API_BASE_URL=https://api.akkuea.com ./scripts/smoke/run-smoke-tests.sh
+```
+
+Full env reference and CI wiring: [`scripts/smoke/README.md`](../../scripts/smoke/README.md).
+
+Optional GitHub Action: **Actions → Smoke tests → Run workflow** (`.github/workflows/smoke.yml`).

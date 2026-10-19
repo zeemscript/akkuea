@@ -14,21 +14,44 @@ globalThis.MutationObserver = dom.window.MutationObserver as any;
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { afterAll, beforeEach, describe, expect, it, mock, vi } from "bun:test";
-import React from "react";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import React, { forwardRef } from "react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import axe from "axe-core";
+import { renderWithIntl } from "@/test/renderWithIntl";
 import { GameProperty, BuildingLevel } from "../../../types/game.types";
 
-// Mock framer-motion to bypass layout/sheet animations for synchronous UI assertions
+// Mock framer-motion to bypass layout/sheet animations for synchronous UI
+// assertions. Uses forwardRef, like the real motion components, so the panel's
+// own ref (used for focus management) attaches to a real DOM node here too.
 mock.module("framer-motion", () => {
+  const motionDiv = forwardRef<HTMLDivElement, any>(function MotionDiv(
+    { children, ...props },
+    ref,
+  ) {
+    return (
+      <div ref={ref} {...props}>
+        {children}
+      </div>
+    );
+  });
+  const motionButton = forwardRef<HTMLButtonElement, any>(function MotionButton(
+    { children, ...props },
+    ref,
+  ) {
+    return (
+      <button ref={ref} {...props}>
+        {children}
+      </button>
+    );
+  });
+
   return {
     AnimatePresence: ({ children }: { children: React.ReactNode }) => (
       <>{children}</>
     ),
     motion: {
-      div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-      button: ({ children, ...props }: any) => (
-        <button {...props}>{children}</button>
-      ),
+      div: motionDiv,
+      button: motionButton,
     },
   };
 });
@@ -42,7 +65,28 @@ vi.mock("@/lib/walletKit", () => ({
   initializeWalletKit: vi.fn(),
 }));
 
+// Mock the Soroban XDR builders + RPC calls so clicking an action button
+// never makes a real network call to testnet - this test only cares about
+// PropertyPanel wiring the right ownership state to the right sub-panel.
+const TEST_TREASURY_ADDRESS =
+  "GCPRLG7MR6J4WL527RRZ6S55GDZQ7ZDIUB6EQTRX77ETVGFH6FFM2F4M";
+const MOCK_UNSIGNED_XDR = "AAAA_UNSIGNED_XDR_BASE64==";
+
+vi.mock("@/lib/soroban-tx", () => ({
+  buildBuyFromTreasuryXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  buildBuyFromPlayerXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  buildImprovePropertyXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  buildApproveMarketplaceXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  buildListForSaleXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  buildClaimIncomeXdr: vi.fn().mockResolvedValue(MOCK_UNSIGNED_XDR),
+  submitSorobanTx: vi.fn().mockResolvedValue("mock-tx-hash"),
+  waitForSorobanTx: vi.fn().mockResolvedValue("success"),
+  NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
+  TREASURY_ADDRESS: TEST_TREASURY_ADDRESS,
+}));
+
 import { PropertyPanel } from "../PropertyPanel";
+import { TREASURY_ADDRESS } from "@/lib/soroban-tx";
 
 const baseProperty: GameProperty = {
   id: "550e8400-e29b-41d4-a716-446655440001",
@@ -67,7 +111,7 @@ const baseProperty: GameProperty = {
   documents: [],
   verified: true,
   listedAt: "2026-05-27T00:00:00Z",
-  owner: "GBTREASURY",
+  owner: TREASURY_ADDRESS,
   buildingLevel: 0,
   improveCost: 100,
   earnedIncome: 0,
@@ -85,9 +129,9 @@ describe("PropertyPanel Tests", () => {
     const onClose = mock(() => {});
     const onConnect = mock(() => {});
 
-    const view = render(
+    const view = renderWithIntl(
       <PropertyPanel
-        property={{ ...baseProperty, owner: "GBTREASURY" }}
+        property={{ ...baseProperty, owner: TREASURY_ADDRESS }}
         onPropertyUpdate={onUpdate}
         viewerAddress={null}
         isConnected={false}
@@ -111,15 +155,15 @@ describe("PropertyPanel Tests", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // State 2: unowned (viewer connected, owner is GBTREASURY)
+  // State 2: unowned (viewer connected, owner is the treasury)
   it("renders state 2: unowned (Treasury owned) tile and allows purchase", async () => {
     const onUpdate = mock(() => {});
     const viewerAddress =
       "GDVIEWER1234567890123456789012345678901234567890123456";
 
-    const view = render(
+    const view = renderWithIntl(
       <PropertyPanel
-        property={{ ...baseProperty, owner: "GBTREASURY" }}
+        property={{ ...baseProperty, owner: TREASURY_ADDRESS }}
         onPropertyUpdate={onUpdate}
         viewerAddress={viewerAddress}
         isConnected={true}
@@ -154,7 +198,7 @@ describe("PropertyPanel Tests", () => {
   it("renders state 3: owned_by_viewer and allows claiming income", () => {
     const onUpdate = mock(() => {});
     const viewerAddress =
-      "GDVIEWER1234567890123456789012345678901234567890123456";
+      "GCPRLG7MR6J4WL527RRZ6S55GDZQ7ZDIUB6EQTRX77ETVGFH6FFM2F4M";
     const propertyOwned = {
       ...baseProperty,
       owner: viewerAddress,
@@ -162,7 +206,7 @@ describe("PropertyPanel Tests", () => {
       earnedIncome: 450,
     };
 
-    const view = render(
+    const view = renderWithIntl(
       <PropertyPanel
         property={propertyOwned}
         onPropertyUpdate={onUpdate}
@@ -193,7 +237,7 @@ describe("PropertyPanel Tests", () => {
   it("renders state 3: owned_by_viewer and allows improving the building", () => {
     const onUpdate = mock(() => {});
     const viewerAddress =
-      "GDVIEWER1234567890123456789012345678901234567890123456";
+      "GCPRLG7MR6J4WL527RRZ6S55GDZQ7ZDIUB6EQTRX77ETVGFH6FFM2F4M";
     const propertyOwned = {
       ...baseProperty,
       owner: viewerAddress,
@@ -201,7 +245,7 @@ describe("PropertyPanel Tests", () => {
       earnedIncome: 0,
     };
 
-    const view = render(
+    const view = renderWithIntl(
       <PropertyPanel
         property={propertyOwned}
         onPropertyUpdate={onUpdate}
@@ -232,7 +276,7 @@ describe("PropertyPanel Tests", () => {
       pricePerShare: "200",
     };
 
-    const view = render(
+    const view = renderWithIntl(
       <PropertyPanel
         property={propertyListed}
         onPropertyUpdate={onUpdate}
@@ -257,6 +301,82 @@ describe("PropertyPanel Tests", () => {
 
     await waitFor(() => {
       expect(mockSignTransaction).toHaveBeenCalled();
+    });
+  });
+
+  it("renders in Spanish", () => {
+    const view = renderWithIntl(
+      <PropertyPanel
+        property={{ ...baseProperty, owner: TREASURY_ADDRESS }}
+        onPropertyUpdate={mock(() => {})}
+        viewerAddress={null}
+        isConnected={false}
+        onConnect={mock(() => {})}
+        onClose={mock(() => {})}
+      />,
+      { locale: "es" },
+    );
+
+    expect(view.queryByText("Detalles del Terreno")).not.toBeNull();
+    expect(view.queryByText("Se Requiere Billetera Stellar")).not.toBeNull();
+    expect(
+      view.queryByRole("button", { name: /Conectar Billetera/i }),
+    ).not.toBeNull();
+  });
+
+  it("has no axe violations", async () => {
+    const viewerAddress =
+      "GCPRLG7MR6J4WL527RRZ6S55GDZQ7ZDIUB6EQTRX77ETVGFH6FFM2F4M";
+    const view = renderWithIntl(
+      <PropertyPanel
+        property={{
+          ...baseProperty,
+          owner: viewerAddress,
+          buildingLevel: 1 as BuildingLevel,
+          earnedIncome: 450,
+        }}
+        onPropertyUpdate={mock(() => {})}
+        viewerAddress={viewerAddress}
+        isConnected={true}
+        onClose={mock(() => {})}
+      />,
+    );
+
+    const results = await axe.run(view.container, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] },
+    });
+
+    expect(results.violations).toEqual([]);
+  });
+
+  describe("focus management", () => {
+    it("moves focus into the panel when it opens, and closes on Escape", () => {
+      const onClose = mock(() => {});
+      const trigger = document.createElement("button");
+      trigger.textContent = "open panel";
+      document.body.appendChild(trigger);
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+
+      const view = renderWithIntl(
+        <PropertyPanel
+          property={{ ...baseProperty, owner: TREASURY_ADDRESS }}
+          onPropertyUpdate={mock(() => {})}
+          viewerAddress={null}
+          isConnected={false}
+          onConnect={mock(() => {})}
+          onClose={onClose}
+        />,
+      );
+
+      const dialog = view.getByRole("dialog");
+      expect(dialog.getAttribute("aria-modal")).toBe("true");
+      expect(document.activeElement).toBe(dialog);
+
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      trigger.remove();
     });
   });
 });

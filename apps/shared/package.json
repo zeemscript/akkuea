@@ -2,8 +2,19 @@
   "name": "@akkuea/shared",
   "version": "1.0.0",
   "description": "Shared utilities and types for Real Estate DeFi platform",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./styles/tokens.css": "./src/styles/tokens.css",
+    "./contracts.testnet.json": "./src/contracts.testnet.json",
+    "./contracts.mainnet.json": "./src/contracts.mainnet.json",
+    "./game-contracts.testnet.json": "./src/contracts/game-contracts.testnet.json"
+  },
   "scripts": {
     "build": "tsc",
     "build:types": "tsc",
@@ -14,7 +25,8 @@
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "generate:pilot-bindings": "stellar contract bindings typescript --contract-id CAOIML5WZYESSX5CPRFHA2OY7UXVW2ISJLL362OVX7MY3G7CMRWN3QA4 --rpc-url https://soroban-testnet.stellar.org --network-passphrase \"Test SDF Network ; September 2015\" --output-dir src/contracts/pilot/generated/whitelist --overwrite && stellar contract bindings typescript --contract-id CDQYJRBYP62Y2BSMDEUBJYM2I4V3JE2RL7TCR3JPTW42NRLUXWKUS3MZ --rpc-url https://soroban-testnet.stellar.org --network-passphrase \"Test SDF Network ; September 2015\" --output-dir src/contracts/pilot/generated/income-token --overwrite && stellar contract bindings typescript --contract-id CBGDO2GUWYSDU4SK3SNJJHYX6HRADUNXCU7TKJFFGLRWA4FSRZNLAJ4J --rpc-url https://soroban-testnet.stellar.org --network-passphrase \"Test SDF Network ; September 2015\" --output-dir src/contracts/pilot/generated/payout-split --overwrite"
   },
   "keywords": [
     "stellar",
@@ -37,7 +49,7 @@
     "typescript-eslint": "^8.57.0"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^13.3.0",
+    "@stellar/stellar-sdk": "^17.0.1",
     "zod": "^3.25.76"
   },
   "resolutions": {

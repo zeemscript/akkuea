@@ -1,0 +1,64 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", ":semanticCommitTypeAll(chore)"],
+  "baseBranchPatterns": ["develop"],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "timezone": "America/Costa_Rica",
+  "schedule": ["before 6am on monday"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "ignorePaths": ["apps/shared/src/contracts/**/generated/**"],
+  "packageRules": [
+    {
+      "description": "Group every non-major update into one PR",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-non-major"
+    },
+    {
+      "description": "Group every major update into one PR",
+      "matchUpdateTypes": ["major"],
+      "groupName": "all major dependencies",
+      "groupSlug": "all-major"
+    },
+    {
+      "description": "0.x minors can be breaking; require dashboard approval",
+      "matchCurrentVersion": "<1.0.0",
+      "matchUpdateTypes": ["minor"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Majors require Dependency Dashboard approval",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "soroban-sdk majors are a contract migration, not a chore",
+      "matchPackageNames": ["soroban-sdk"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Python in CI is only used by the style quality gate",
+      "matchPackageNames": ["python"],
+      "enabled": false
+    },
+    {
+      "description": "bun-types is set to latest by design",
+      "matchPackageNames": ["bun-types"],
+      "enabled": false
+    },
+    {
+      "description": "Pin GitHub Actions to commit SHA",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "groupName": "security updates"
+  }
+}

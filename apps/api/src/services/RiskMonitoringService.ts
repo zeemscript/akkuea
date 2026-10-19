@@ -3,7 +3,7 @@ import type {
   RiskLevel,
   RiskStateTransition,
   LiquidationReadiness,
-} from '@real-estate-defi/shared';
+} from '@akkuea/shared';
 import type { BorrowPosition } from '../db/schema';
 import { RiskMonitoringRepository } from '../repositories/RiskMonitoringRepository';
 
@@ -101,5 +101,27 @@ export class RiskMonitoringService {
       return this.repository.getTransitionsByPosition(positionId);
     }
     return this.repository.getRecentTransitions();
+  }
+
+  async getCollateralRatioHistory(
+    positionId: string,
+    startDate?: Date,
+    endDate?: Date,
+  ): Promise<{ timestamp: string; ratio: number }[]> {
+    let transitions = await this.repository.getTransitionsByPosition(positionId);
+
+    if (startDate) {
+      transitions = transitions.filter((t) => new Date(t.timestamp) >= startDate);
+    }
+    if (endDate) {
+      transitions = transitions.filter((t) => new Date(t.timestamp) <= endDate);
+    }
+
+    transitions.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    return transitions.map((t) => ({
+      timestamp: new Date(t.timestamp).toISOString(),
+      ratio: t.healthFactor,
+    }));
   }
 }

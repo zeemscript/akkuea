@@ -1,5 +1,7 @@
 use soroban_sdk::{contracttype, Env, String};
 
+use crate::access::ContractError;
+
 use super::keys::{lending_bump, LendingKey};
 
 /// Precision for fixed-point calculations (18 decimals)
@@ -39,31 +41,37 @@ impl Default for InterestRateModel {
 impl InterestRateModel {
     /// Calculate borrow rate based on utilization
     /// Uses checked arithmetic to prevent overflow
-    pub fn calculate_borrow_rate(&self, utilization: i128) -> i128 {
+    pub fn calculate_borrow_rate(&self, utilization: i128) -> Result<i128, ContractError> {
         if utilization <= self.optimal_utilization {
             // Below optimal: base + utilization * slope1 / optimal
             let slope_component = utilization
                 .checked_mul(self.slope1)
-                .expect("Borrow rate overflow: utilization * slope1")
-                / self.optimal_utilization;
+                .ok_or(ContractError::BorrowRateUtilizationMulOverflow)?
+                .checked_div(self.optimal_utilization)
+                .ok_or(ContractError::BalanceOverflow)?;
             self.base_rate
                 .checked_add(slope_component)
-                .expect("Borrow rate overflow: base + slope_component")
+                .ok_or(ContractError::BorrowRateBaseAddOverflow)
         } else {
             // Above optimal: rate_at_optimal + (utilization - optimal) * slope2 / (1 - optimal)
             let rate_at_optimal = self
                 .base_rate
                 .checked_add(self.slope1)
-                .expect("Borrow rate overflow: base + slope1");
-            let excess_utilization = utilization - self.optimal_utilization;
-            let remaining = PRECISION - self.optimal_utilization;
+                .ok_or(ContractError::BorrowRateBaseSlope1AddOverflow)?;
+            let excess_utilization = utilization
+                .checked_sub(self.optimal_utilization)
+                .ok_or(ContractError::BalanceOverflow)?;
+            let remaining = PRECISION
+                .checked_sub(self.optimal_utilization)
+                .ok_or(ContractError::BalanceOverflow)?;
             let excess_component = excess_utilization
                 .checked_mul(self.slope2)
-                .expect("Borrow rate overflow: excess * slope2")
-                / remaining;
+                .ok_or(ContractError::BorrowRateExcessMulOverflow)?
+                .checked_div(remaining)
+                .ok_or(ContractError::BalanceOverflow)?;
             rate_at_optimal
                 .checked_add(excess_component)
-                .expect("Borrow rate overflow: rate_at_optimal + excess_component")
+                .ok_or(ContractError::BorrowRateRateAtOptimalAddOverflow)
         }
     }
 
@@ -74,17 +82,21 @@ impl InterestRateModel {
         borrow_rate: i128,
         utilization: i128,
         reserve_factor: i128,
-    ) -> i128 {
-        // supply_rate = borrow_rate * utilization * (1 - reserve_factor)
+    ) -> Result<i128, ContractError> {
+        // supply_rate = borrow_rate * utilization * (1 - reserve_factor) / PRECISION^2
+        // Keep each fixed-point operation checked, including the scaled product.
         let effective_rate = borrow_rate
             .checked_mul(utilization)
-            .expect("Supply rate overflow: borrow_rate * utilization")
-            / PRECISION;
-        let factor = PRECISION - reserve_factor;
+            .ok_or(ContractError::SupplyRateBorrowRateMulOverflow)?
+            .checked_div(PRECISION)
+            .ok_or(ContractError::BalanceOverflow)?;
+        let factor = PRECISION
+            .checked_sub(reserve_factor)
+            .ok_or(ContractError::BalanceOverflow)?;
         effective_rate
             .checked_mul(factor)
-            .expect("Supply rate overflow: effective_rate * factor")
-            / PRECISION
+            .and_then(|value| value.checked_div(PRECISION))
+            .ok_or(ContractError::BalanceOverflow)
     }
 }
 
@@ -160,35 +172,45 @@ impl InterestStorage {
     /// This avoids the underestimation inherent in the linear approximation
     /// `index * (1 + rate * time)` for longer accrual intervals.
     /// Uses checked arithmetic to prevent overflow.
-    pub fn calculate_new_index(current_index: i128, borrow_rate: i128, time_elapsed: u64) -> i128 {
+    pub fn calculate_new_index(
+        current_index: i128,
+        borrow_rate: i128,
+        time_elapsed: u64,
+    ) -> Result<i128, ContractError> {
         if time_elapsed == 0 {
-            return current_index;
+            return Ok(current_index);
         }
 
         // rate_per_second in PRECISION units
-        let rate_per_second = borrow_rate / (SECONDS_PER_YEAR as i128);
+        let rate_per_second = borrow_rate
+            .checked_div(SECONDS_PER_YEAR as i128)
+            .ok_or(ContractError::BalanceOverflow)?;
 
         // base = 1 + rate_per_second  (in PRECISION units)
         let base = PRECISION
             .checked_add(rate_per_second)
-            .expect("Interest calculation base overflow");
+            .ok_or(ContractError::BalanceOverflow)?;
 
         // Compute base^time_elapsed using exponentiation by squaring
-        let compound_factor = Self::pow_precision(base, time_elapsed);
+        let compound_factor = Self::pow_precision(base, time_elapsed)?;
 
         current_index
             .checked_mul(compound_factor)
-            .expect("Interest calculation index overflow")
-            / PRECISION
+            .ok_or(ContractError::NewIndexMulOverflow)
+            .and_then(|value| {
+                value
+                    .checked_div(PRECISION)
+                    .ok_or(ContractError::BalanceOverflow)
+            })
     }
 
     /// Fixed-point exponentiation by squaring.
     ///
     /// Computes `base ^ exp` where `base` is in PRECISION units.
     /// Returns the result in PRECISION units.
-    fn pow_precision(base: i128, exp: u64) -> i128 {
+    fn pow_precision(base: i128, exp: u64) -> Result<i128, ContractError> {
         if exp == 0 {
-            return PRECISION;
+            return Ok(PRECISION);
         }
 
         let mut result = PRECISION;
@@ -197,12 +219,20 @@ impl InterestStorage {
 
         while e > 0 {
             if e & 1 == 1 {
-                result = (result * b) / PRECISION;
+                result = result
+                    .checked_mul(b)
+                    .ok_or(ContractError::PowPrecisionOverflow)?
+                    .checked_div(PRECISION)
+                    .ok_or(ContractError::BalanceOverflow)?;
             }
-            b = (b * b) / PRECISION;
+            b = b
+                .checked_mul(b)
+                .ok_or(ContractError::PowPrecisionOverflow)?
+                .checked_div(PRECISION)
+                .ok_or(ContractError::BalanceOverflow)?;
             e >>= 1;
         }
 
-        result
+        Ok(result)
     }
 }

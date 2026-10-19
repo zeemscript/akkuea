@@ -1,6 +1,18 @@
 import { useState } from "react";
 import { GameProperty } from "../types/game.types";
 import { getWalletKit } from "@/lib/walletKit";
+import {
+  buildBuyFromTreasuryXdr,
+  buildBuyFromPlayerXdr,
+  buildImprovePropertyXdr,
+  buildApproveMarketplaceXdr,
+  buildListForSaleXdr,
+  buildClaimIncomeXdr,
+  submitSorobanTx,
+  waitForSorobanTx,
+  NETWORK_PASSPHRASE,
+  TREASURY_ADDRESS,
+} from "@/lib/soroban-tx";
 
 export const usePropertyActions = (
   property: GameProperty,
@@ -40,6 +52,31 @@ export const usePropertyActions = (
     }
   };
 
+  /**
+   * Sign a built XDR with the connected wallet and submit + wait for
+   * confirmation via the Soroban RPC.
+   *
+   * Throws on signing failure, submission error, or on-chain failure.
+   */
+  const signAndSubmit = async (unsignedXdr: string): Promise<void> => {
+    const kit = getWalletKit();
+    if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
+
+    // Ask Freighter (or another wallet) to sign the transaction
+    const { signedTxXdr } = await kit.signTransaction(unsignedXdr, {
+      networkPassphrase: NETWORK_PASSPHRASE,
+      address: viewerAddress!,
+    });
+
+    // Submit signed XDR to the Soroban RPC
+    const txHash = await submitSorobanTx(signedTxXdr);
+
+    // Poll until confirmed or failed (throws on failure)
+    await waitForSorobanTx(txHash);
+  };
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+
   const buyFromTreasury = async () => {
     await handleAction(
       "Buy from Treasury",
@@ -50,17 +87,12 @@ export const usePropertyActions = (
         availableShares: 0,
       }),
       async () => {
-        const kit = getWalletKit();
-        if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
-
-        // Mock a transaction envelope (XDR representation) for the Treasury purchase
-        // TODO: replace with real Soroban contract invocation XDR
-        // Tracked in: [link to contract task]
-        const mockXdr = "AAAAAgAAAAD5r+Hl5S94D......";
-        await kit.signTransaction(mockXdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
-          address: viewerAddress!,
-        });
+        const xdr = await buildBuyFromTreasuryXdr(
+          viewerAddress!,
+          property.id,
+          TREASURY_ADDRESS,
+        );
+        await signAndSubmit(xdr);
       },
     );
   };
@@ -88,16 +120,8 @@ export const usePropertyActions = (
         improveCost: cost * 2,
       }),
       async () => {
-        const kit = getWalletKit();
-        if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
-
-        // TODO: replace with real Soroban contract invocation XDR
-        // Tracked in: [link to contract task]
-        const mockXdr = "AAAAAgAAAAD5r+Hl5S94D......";
-        await kit.signTransaction(mockXdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
-          address: viewerAddress!,
-        });
+        const xdr = await buildImprovePropertyXdr(viewerAddress!, property.id);
+        await signAndSubmit(xdr);
       },
     );
   };
@@ -117,16 +141,20 @@ export const usePropertyActions = (
         isListed: true,
       }),
       async () => {
-        const kit = getWalletKit();
-        if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
+        // The marketplace escrows the NFT via transfer_from, so it must be
+        // approved as spender before list() will succeed.
+        const approveXdr = await buildApproveMarketplaceXdr(
+          viewerAddress!,
+          property.id,
+        );
+        await signAndSubmit(approveXdr);
 
-        // TODO: replace with real Soroban contract invocation XDR
-        // Tracked in: [link to contract task]
-        const mockXdr = "AAAAAgAAAAD5r+Hl5S94D......";
-        await kit.signTransaction(mockXdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
-          address: viewerAddress!,
-        });
+        const listXdr = await buildListForSaleXdr(
+          viewerAddress!,
+          property.id,
+          price,
+        );
+        await signAndSubmit(listXdr);
       },
     );
   };
@@ -146,16 +174,8 @@ export const usePropertyActions = (
         earnedIncome: 0,
       }),
       async () => {
-        const kit = getWalletKit();
-        if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
-
-        // TODO: replace with real Soroban contract invocation XDR
-        // Tracked in: [link to contract task]
-        const mockXdr = "AAAAAgAAAAD5r+Hl5S94D......";
-        await kit.signTransaction(mockXdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
-          address: viewerAddress!,
-        });
+        const xdr = await buildClaimIncomeXdr(viewerAddress!, property.id);
+        await signAndSubmit(xdr);
       },
     );
   };
@@ -170,16 +190,8 @@ export const usePropertyActions = (
         isListed: false,
       }),
       async () => {
-        const kit = getWalletKit();
-        if (!kit) throw new Error("Stellar Wallet Kit is not initialized.");
-
-        // TODO: replace with real Soroban contract invocation XDR
-        // Tracked in: [link to contract task]
-        const mockXdr = "AAAAAgAAAAD5r+Hl5S94D......";
-        await kit.signTransaction(mockXdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
-          address: viewerAddress!,
-        });
+        const xdr = await buildBuyFromPlayerXdr(viewerAddress!, property.id);
+        await signAndSubmit(xdr);
       },
     );
   };

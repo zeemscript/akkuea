@@ -1,6 +1,7 @@
 import type { AuthContext } from '../middleware/auth';
 import { NotificationService } from '../services/NotificationService';
 import { ApiError } from '../errors/ApiError';
+import { logger } from '../services/logger';
 
 type NotificationBody = {
   email?: string;
@@ -8,6 +9,8 @@ type NotificationBody = {
   message?: string;
   notificationIds?: string[];
 };
+
+const MAX_BULK_MARK_AS_READ_IDS = 100;
 
 export class NotificationController {
   private static notificationService = new NotificationService();
@@ -52,7 +55,7 @@ export class NotificationController {
         pagination: { limit, offset },
       });
     } catch (error) {
-      console.error(error);
+      logger.error('Failed to retrieve notifications', error);
 
       throw new ApiError(500, 'INTERNAL_ERROR', 'Failed to retrieve notifications');
     }
@@ -68,7 +71,7 @@ export class NotificationController {
       const count = await this.notificationService.getUnreadCount(userId);
       return this.jsonResponse({ unreadCount: count });
     } catch (error) {
-      console.error(error);
+      logger.error('Failed to retrieve unread count', error);
 
       throw new ApiError(500, 'INTERNAL_ERROR', 'Failed to retrieve unread count');
     }
@@ -158,6 +161,14 @@ export class NotificationController {
       throw new ApiError(400, 'VALIDATION_ERROR', 'notificationIds must be an array');
     }
 
+    if (body.notificationIds.length > MAX_BULK_MARK_AS_READ_IDS) {
+      throw new ApiError(
+        400,
+        'VALIDATION_ERROR',
+        `notificationIds must contain at most ${MAX_BULK_MARK_AS_READ_IDS} ids`,
+      );
+    }
+
     try {
       // Verify ownership of all notifications
       for (const id of body.notificationIds) {
@@ -197,7 +208,7 @@ export class NotificationController {
         count,
       });
     } catch (error) {
-      console.error(error);
+      logger.error('Failed to update notifications', error);
 
       throw new ApiError(500, 'INTERNAL_ERROR', 'Failed to update notifications');
     }

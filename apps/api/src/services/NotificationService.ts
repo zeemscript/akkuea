@@ -1,9 +1,12 @@
 import { NotificationRepository } from '../repositories/NotificationRepository';
+import { NotificationDlqRepository } from '../repositories/NotificationDlqRepository';
+import { logger } from './logger';
 import type {
   NewNotification,
   NotificationEventType,
   NotificationChannel,
   Notification,
+  NotificationDlqEntry,
 } from '../db/schema';
 
 interface CreateNotificationInput {
@@ -21,18 +24,31 @@ interface CreateNotificationInput {
 interface NotificationDeliveryConfig {
   maxRetries: number;
   retryDelayMs: number;
+  maxRetryDelayMs?: number;
 }
 
 export class NotificationService {
   private repository: NotificationRepository;
-  private deliveryConfig: NotificationDeliveryConfig;
+  private dlqRepository: NotificationDlqRepository;
+  private deliveryConfig: Required<NotificationDeliveryConfig>;
 
-  constructor(repository?: NotificationRepository, config?: NotificationDeliveryConfig) {
+  constructor(
+    repository?: NotificationRepository,
+    config?: NotificationDeliveryConfig,
+    dlqRepository?: NotificationDlqRepository,
+  ) {
     this.repository = repository || new NotificationRepository();
-    this.deliveryConfig = config || {
-      maxRetries: 3,
-      retryDelayMs: 60000, // 1 minute
+    this.dlqRepository = dlqRepository || new NotificationDlqRepository();
+    const base = config || { maxRetries: 3, retryDelayMs: 60_000 };
+    this.deliveryConfig = {
+      maxRetries: base.maxRetries,
+      retryDelayMs: base.retryDelayMs,
+      maxRetryDelayMs: base.maxRetryDelayMs ?? 60 * 60 * 1_000, // 1 hour cap
     };
+  }
+
+  getMaxRetries(): number {
+    return this.deliveryConfig.maxRetries;
   }
 
   /**
@@ -160,26 +176,44 @@ export class NotificationService {
     });
   }
 
-  /**
-   * Mark notification as failed and schedule retry
-   */
-  async markAsFailed(notificationId: string, reason: string): Promise<Notification | undefined> {
+  async markAsFailed(
+    notificationId: string,
+    reason: string,
+    nextRetryDelayMs?: number,
+  ): Promise<Notification | undefined> {
     const notification = await this.repository.findById(notificationId);
     if (!notification) return undefined;
 
     const retryCount = parseInt(notification.retryCount) + 1;
     const maxRetries = parseInt(notification.maxRetries);
 
-    // Check if we should retry
     if (retryCount >= maxRetries) {
-      return this.repository.updateDeliveryStatus(notificationId, 'FAILED', {
+      try {
+        await this.dlqRepository.createFromNotification(
+          { ...notification, retryCount: retryCount.toString(), failureReason: reason },
+          reason,
+        );
+      } catch (err) {
+        logger.warn('Failed to insert DLQ entry', {
+          operation: 'DLQ_WRITE_FAILED',
+          notificationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      return this.repository.updateDeliveryStatus(notificationId, 'BOUNCED', {
         failureReason: reason,
         retryCount,
       });
     }
 
-    // Schedule next retry
-    const nextRetryAt = new Date(Date.now() + this.deliveryConfig.retryDelayMs * retryCount);
+    const delayMs =
+      nextRetryDelayMs ??
+      Math.min(
+        this.deliveryConfig.retryDelayMs * Math.pow(2, retryCount - 1),
+        this.deliveryConfig.maxRetryDelayMs,
+      );
+    const nextRetryAt = new Date(Date.now() + delayMs);
     return this.repository.updateDeliveryStatus(notificationId, 'FAILED', {
       failureReason: reason,
       retryCount,
@@ -394,6 +428,65 @@ export class NotificationService {
   }
 
   /**
+   * Notify KYC expiring soon (reminder)
+   */
+  async notifyKycExpiringSoon(
+    userId: string,
+    expiresAt: Date,
+    channel: NotificationChannel = 'IN_APP',
+  ): Promise<Notification> {
+    const dateStr = expiresAt.toLocaleDateString();
+    return this.createNotification({
+      userId,
+      eventType: 'KYC_EXPIRY_REMINDER',
+      title: 'KYC Verification Expiring Soon',
+      message: `Your KYC verification will expire on ${dateStr}. Please re-verify to avoid disruption to your account.`,
+      channel,
+      metadata: { expiresAt: expiresAt.toISOString() },
+    });
+  }
+
+  /**
+   * Notify KYC has expired
+   */
+  async notifyKycExpired(
+    userId: string,
+    channel: NotificationChannel = 'IN_APP',
+  ): Promise<Notification> {
+    return this.createNotification({
+      userId,
+      eventType: 'KYC_EXPIRED',
+      title: 'KYC Verification Expired',
+      message:
+        'Your KYC verification has expired. Please re-submit your documents to regain full platform access.',
+      channel,
+    });
+  }
+
+  /**
+   * Notify an operator that a pilot ally has missed two or more consecutive
+   * expected evidence-reporting cycles for a `pilot-payout-split` contract.
+   */
+  async notifyPilotReportingEscalation(
+    operatorUserId: string,
+    contractId: string,
+    consecutiveMissed: number,
+    missedCycleIds: string[],
+    channel: NotificationChannel = 'IN_APP',
+  ): Promise<Notification> {
+    return this.createNotification({
+      userId: operatorUserId,
+      eventType: 'PILOT_REPORTING_ESCALATION',
+      title: 'Pilot Ally Reporting Escalation',
+      message: `The pilot ally has missed ${consecutiveMissed} consecutive evidence-reporting cycles (${missedCycleIds.join(', ')}). Review the payout split contract and follow up with the ally.`,
+      channel,
+      relatedEntityType: 'pilot_payout_split',
+      relatedEntityId: contractId,
+      metadata: { consecutiveMissed, missedCycleIds },
+    });
+  }
+
+  /**
    * Notify investment opportunity
    */
   async notifyInvestmentOpportunity(
@@ -442,5 +535,48 @@ export class NotificationService {
    */
   async cleanupOldNotifications(daysToKeep = 90): Promise<number> {
     return this.repository.deleteOlderThan(daysToKeep);
+  }
+
+  async getDlqEntries(limit = 100, offset = 0): Promise<NotificationDlqEntry[]> {
+    return this.dlqRepository.findPending(limit, offset);
+  }
+
+  async getDlqEntryById(dlqId: string): Promise<NotificationDlqEntry | undefined> {
+    return this.dlqRepository.findById(dlqId);
+  }
+
+  async reprocessDlqEntry(
+    dlqId: string,
+    requeuedBy: string,
+  ): Promise<{ dlqEntry: NotificationDlqEntry; notification: Notification }> {
+    const dlqEntry = await this.dlqRepository.findById(dlqId);
+    if (!dlqEntry) {
+      throw new Error(`DLQ entry not found: ${dlqId}`);
+    }
+    if (dlqEntry.requeuedAt) {
+      throw new Error(`DLQ entry ${dlqId} has already been requeued`);
+    }
+    if (dlqEntry.resolvedAt) {
+      throw new Error(`DLQ entry ${dlqId} has already been resolved`);
+    }
+
+    const notification = await this.repository.create({
+      userId: dlqEntry.userId,
+      eventType: dlqEntry.eventType as Parameters<typeof this.repository.create>[0]['eventType'],
+      title: dlqEntry.title,
+      message: dlqEntry.message,
+      channel: dlqEntry.channel as Parameters<typeof this.repository.create>[0]['channel'],
+      recipient: dlqEntry.recipient ?? undefined,
+      relatedEntityType: dlqEntry.relatedEntityType ?? undefined,
+      relatedEntityId: dlqEntry.relatedEntityId ?? undefined,
+      metadata: dlqEntry.metadata ?? undefined,
+      deliveryStatus: 'PENDING',
+      maxRetries: this.deliveryConfig.maxRetries.toString(),
+      retryCount: '0',
+    });
+
+    const updated = await this.dlqRepository.markAsRequeued(dlqId, requeuedBy);
+
+    return { dlqEntry: updated!, notification };
   }
 }

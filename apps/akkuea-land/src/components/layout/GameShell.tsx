@@ -1,13 +1,16 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Map, ShoppingBag, LayoutDashboard, Wallet } from "lucide-react";
+import { Link, usePathname } from "@/i18n/routing";
+import { PilotCta } from "@/components/game/PilotCta";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { LocaleSwitcher } from "@/components/layout/LocaleSwitcher";
 
 const NAV_LINKS = [
-  { href: "/map", label: "Map", icon: Map },
-  { href: "/marketplace", label: "Marketplace", icon: ShoppingBag },
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/map", labelKey: "map", icon: Map },
+  { href: "/marketplace", labelKey: "marketplace", icon: ShoppingBag },
+  { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
 ] as const;
 
 interface GameShellProps {
@@ -23,6 +26,8 @@ export function GameShell({
   walletAddress = null,
   landBalance = "0",
 }: GameShellProps) {
+  const t = useTranslations("Nav");
+  const tCommon = useTranslations("Common");
   const pathname = usePathname();
 
   return (
@@ -35,12 +40,12 @@ export function GameShell({
           className="flex items-center gap-2 font-bold text-land-fg hover:text-land-accent transition-colors shrink-0"
         >
           <span className="text-land-accent text-lg">◈</span>
-          <span className="text-sm tracking-wide">AKKUEA LAND</span>
+          <span className="text-sm tracking-wide">{t("appName")}</span>
         </Link>
 
         {/* Nav links */}
         <nav className="flex items-center gap-1 ml-4">
-          {NAV_LINKS.map(({ href, label, icon: Icon }) => {
+          {NAV_LINKS.map(({ href, labelKey, icon: Icon }) => {
             const active = pathname === href;
             return (
               <Link
@@ -52,8 +57,8 @@ export function GameShell({
                     : "text-land-fg-muted hover:text-land-fg hover:bg-land-surface-raised"
                 }`}
               >
-                <Icon size={14} />
-                {label}
+                <Icon size={14} aria-hidden="true" />
+                {t(labelKey)}
               </Link>
             );
           })}
@@ -61,6 +66,9 @@ export function GameShell({
 
         {/* Right side: LAND balance + wallet */}
         <div className="ml-auto flex items-center gap-3">
+          <LocaleSwitcher />
+          <ThemeToggle />
+
           {walletAddress && (
             <div className="flex items-center gap-1.5 bg-land-gold-dim border border-land-border rounded-lg px-3 py-1.5">
               <span className="text-land-gold text-xs font-mono font-bold">
@@ -76,11 +84,15 @@ export function GameShell({
                 walletAddress ? "bg-land-success" : "bg-land-fg-subtle"
               }`}
             />
-            <Wallet size={14} className="text-land-fg-muted" />
+            <Wallet
+              size={14}
+              className="text-land-fg-muted"
+              aria-hidden="true"
+            />
             <span className="text-xs font-mono text-land-fg-muted">
               {walletAddress
                 ? `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`
-                : "Not connected"}
+                : tCommon("notConnected")}
             </span>
           </div>
         </div>
@@ -88,6 +100,14 @@ export function GameShell({
 
       {/* Page content */}
       <main className="flex-1">{children}</main>
+
+      {/* Pilot funnel: only on the dashboard, where a player has seen the
+          buy, earn, claim loop and the pointer to the real pilot lands. */}
+      {pathname === "/dashboard" && (
+        <footer className="border-t border-land-border bg-land-surface px-4 py-2.5 text-center">
+          <PilotCta variant="compact" />
+        </footer>
+      )}
     </div>
   );
 }

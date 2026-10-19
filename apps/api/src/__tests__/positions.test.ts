@@ -8,7 +8,7 @@ import {
   VALID_STELLAR_ADDRESS,
   VALID_STELLAR_ADDRESS_2,
   VALID_UUID as VALID_POOL_ID,
-} from '@real-estate-defi/shared';
+} from '@akkuea/shared';
 
 const INVALID_STELLAR_ADDRESS = 'NOT_A_VALID_STELLAR_ADDRESS';
 const FIXED_NOW = new Date('2026-03-22T12:00:00.000Z');
@@ -43,6 +43,7 @@ const testUser: User = {
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   updatedAt: new Date('2026-01-01T00:00:00.000Z'),
   lastLoginAt: null,
+  kycExpiresAt: null,
 };
 
 const testDeposit: DepositPosition = {

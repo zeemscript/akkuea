@@ -4,30 +4,55 @@ Thank you for your interest in contributing to Akkuea. This guide covers everyth
 
 Please read this document in its entirety before opening your first pull request. Following these standards protects the stability of the platform and makes the review process fast and efficient for everyone.
 
+> **If you are contributing for Drips points or GrantFox funding, read [Contributor Incentives: Drips and GrantFox](#contributor-incentives-drips-and-grantfox) before you start work.** It explains what Akkuea does and does not control in those processes.
+
 ---
 
 ## Table of Contents
 
 1. [Code of Conduct](#code-of-conduct)
-2. [How We Work: Fork-Based Workflow](#how-we-work-fork-based-workflow)
-3. [Setting Up Your Fork](#setting-up-your-fork)
-4. [Keeping Your Fork Up to Date](#keeping-your-fork-up-to-date)
-5. [Branching Strategy](#branching-strategy)
-6. [Working on an Issue](#working-on-an-issue)
-7. [Commit Standards](#commit-standards)
-8. [Code Quality Standards](#code-quality-standards)
-9. [Testing Requirements](#testing-requirements)
-10. [CI/CD: Workflows Must Pass](#cicd-workflows-must-pass)
-11. [Opening a Pull Request](#opening-a-pull-request)
-12. [Pull Request Checklist](#pull-request-checklist)
-13. [Review Process](#review-process)
-14. [Common Pitfalls](#common-pitfalls)
+2. [Contributor Incentives: Drips and GrantFox](#contributor-incentives-drips-and-grantfox)
+3. [How We Work: Fork-Based Workflow](#how-we-work-fork-based-workflow)
+4. [Setting Up Your Fork](#setting-up-your-fork)
+5. [Keeping Your Fork Up to Date](#keeping-your-fork-up-to-date)
+6. [Branching Strategy](#branching-strategy)
+7. [Working on an Issue](#working-on-an-issue)
+8. [Commit Standards](#commit-standards)
+9. [Code Quality Standards](#code-quality-standards)
+10. [Testing Requirements](#testing-requirements)
+11. [CI/CD: Workflows Must Pass](#cicd-workflows-must-pass)
+12. [Opening a Pull Request](#opening-a-pull-request)
+13. [Pull Request Checklist](#pull-request-checklist)
+14. [Review Process](#review-process)
+15. [Common Pitfalls](#common-pitfalls)
 
 ---
 
 ## Code of Conduct
 
 All contributors are expected to interact with respect and professionalism. Harassment, dismissive language, and personal attacks will not be tolerated. If you observe or experience unacceptable behavior, report it to the maintainers.
+
+---
+
+## Contributor Incentives: Drips and GrantFox
+
+Akkuea recognizes external contributions through [Drips](https://drips.network) points and, for select approved contributions, funding allocated through [GrantFox](https://grantfox.xyz). This section sets expectations for how those processes work and where responsibility sits, so there is no ambiguity for contributors relying on them. Read this before you start work if Drips points or GrantFox funding are a factor in your decision to contribute.
+
+### Open issues as early as possible
+
+We recommend opening an issue as soon as you identify a gap, bug, or improvement, rather than waiting until you have a finished pull request. An early issue gives maintainers time to weigh in on scope, gives other contributors visibility before duplicate work starts, and gives your contribution the best chance of being reviewed and recognized promptly.
+
+### Our commitment to review
+
+We are committed to reviewing every pull request opened against this repository. That review is done carefully, not quickly: we take the time needed to verify correctness, security, and consistency with the [product brief](docs/strategy/product-brief.md) and the standards in this document. A thorough review can take longer than a same-day turnaround. We review pull requests as promptly as we reasonably can, but we do not guarantee a fixed response time.
+
+### Drips points and GrantFox payment are outside our control
+
+- Drips is the system of record for contribution points, not Akkuea. Akkuea reviews and merges contributions, but does not control if or when points are reflected on Drips. If points do not appear after a merge, this is a Drips-side matter.
+- For contributions approved for funding, Akkuea allocates an amount through GrantFox as recognition of the work. Allocating an amount is not the same as payment: GrantFox is the platform responsible for confirming and disbursing that payment, and GrantFox makes that final determination, not Akkuea.
+- If a Drips allocation does not sync, or a GrantFox allocation is delayed or not paid, Akkuea will make a reasonable effort to help a contributor resolve it, but the outcome is not entirely in Akkuea's hands and is not Akkuea's responsibility.
+
+None of the above affects code review quality or merge criteria. Every pull request is reviewed and merged strictly on its technical merits, independent of its Drips or GrantFox status.
 
 ---
 
@@ -347,6 +372,9 @@ bun run test
 cd apps/api && bun test
 cd apps/webapp && bun test
 cd apps/contracts && cargo test
+
+# Run the webapp's Playwright e2e suite (see apps/webapp/README.md#testing)
+cd apps/webapp && bun run test:e2e
 ```
 
 ### What makes a good test
@@ -373,33 +401,27 @@ Akkuea runs five GitHub Actions workflows on every pull request. **All five must
 | ------------------ | --------------------------------------------------------------------------------------------------------- |
 | `monorepo-ci.yml`  | Workspace integrity, dependency consistency, cross-workspace type compatibility, security compliance scan |
 | `api-ci.yml`       | API lint, type-check, unit and integration tests, build                                                   |
-| `webapp-ci.yml`    | Webapp lint, type-check, unit tests, build                                                                |
+| `webapp-ci.yml`    | Webapp lint, type-check, unit tests, build, Playwright e2e tests (isolated job)                            |
 | `shared-ci.yml`    | Shared library lint, type-check, build                                                                    |
 | `contracts-ci.yml` | Rust format (`rustfmt`), linting (`cargo clippy`), unit tests, WASM build                                 |
 
 ### Before opening your pull request
 
-Run every check locally to catch failures before CI does:
+Run this from the repository root:
 
 ```bash
-# Type checking
-bun run typecheck
-
-# Linting
-bun run lint
-
-# Tests
-bun run test
-
-# Full build
-bun run build
-
-# Smart contracts (from apps/contracts/)
-cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
-cargo build --target wasm32-unknown-unknown --release
+make check
 ```
+
+It runs the same checks as the pull-request workflows for the parts of the repository your branch changes, and ends with a pass/fail summary. Fix everything it reports and run it again until it passes.
+
+- `make fix` applies the formatting fixes (Prettier per workspace, `cargo fmt`).
+- `make check-all` runs every check, whatever you changed.
+- The API database tests need Docker running. Playwright end-to-end tests run with `E2E=1 make check`.
+- If a tool is missing, `make check` tells you how to install it. Skipped checks still run in CI.
+- CI tests your branch merged into `develop`. Keep it current with `git fetch upstream && git rebase upstream/develop`.
+
+If you use an AI assistant, see [AGENTS.md](AGENTS.md).
 
 ### Investigating CI failures
 

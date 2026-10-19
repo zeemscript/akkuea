@@ -1,7 +1,8 @@
 import { Elysia } from 'elysia';
 import { KYCController } from '../controllers/KYCController';
 import { ApiError } from '../errors/ApiError';
-import { rateLimit, authPlugin } from '../middleware';
+import { rateLimit, walletKeyGenerator, authPlugin } from '../middleware';
+import { isInternalOperationsAuthorized } from '../utils/internalOperationsAuth';
 
 const DOCUMENT_TYPES = [
   'passport',
@@ -45,17 +46,27 @@ function handleKycError(error: unknown, set: SetStatus) {
 // User-scoped routes (require JWT + ownership)
 const userScoped = new Elysia()
   .use(authPlugin)
-  .get('/status/:userId', async ({ params: { userId }, set, getAuthenticatedUser }) => {
-    try {
-      const status = await KYCController.getKYCStatus(userId);
+  .get(
+    '/status/:userId',
+    async ({ params: { userId }, set, getAuthenticatedUser }) => {
+      try {
+        const status = await KYCController.getKYCStatus(userId);
 
-      const { id } = await getAuthenticatedUser();
-      if (id !== userId) throw new ApiError(403, 'FORBIDDEN', 'Access denied');
-      return status;
-    } catch (error) {
-      return handleKycError(error, set);
-    }
-  })
+        const { id } = await getAuthenticatedUser();
+        if (id !== userId) throw new ApiError(403, 'FORBIDDEN', 'Access denied');
+        return status;
+      } catch (error) {
+        return handleKycError(error, set);
+      }
+    },
+    {
+      detail: {
+        summary: 'Get KYC status',
+        description: 'Retrieve the KYC verification status for a user',
+        tags: ['KYC'],
+      },
+    },
+  )
   .post(
     '/submit',
     async ({ body, set, getAuthenticatedUser }) => {
@@ -74,24 +85,41 @@ const userScoped = new Elysia()
         return handleKycError(error, set);
       }
     },
-    { beforeHandle: [rateLimit()] },
+    {
+      beforeHandle: [rateLimit({ keyGenerator: walletKeyGenerator })],
+      detail: {
+        summary: 'Submit KYC',
+        description: 'Submit KYC verification documents for a user',
+        tags: ['KYC'],
+      },
+    },
   )
-  .get('/documents/:userId', async ({ params: { userId }, set, getAuthenticatedUser }) => {
-    try {
-      const { id } = await getAuthenticatedUser();
-      if (id !== userId) throw new ApiError(403, 'FORBIDDEN', 'Access denied');
-      return await KYCController.getUserDocuments(userId);
-    } catch (error) {
-      return handleKycError(error, set);
-    }
-  });
+  .get(
+    '/documents/:userId',
+    async ({ params: { userId }, set, getAuthenticatedUser }) => {
+      try {
+        const { id } = await getAuthenticatedUser();
+        if (id !== userId) throw new ApiError(403, 'FORBIDDEN', 'Access denied');
+        return await KYCController.getUserDocuments(userId);
+      } catch (error) {
+        return handleKycError(error, set);
+      }
+    },
+    {
+      detail: {
+        summary: 'Get user documents',
+        description: 'Retrieve uploaded KYC documents for a user',
+        tags: ['KYC'],
+      },
+    },
+  );
 
 // Unauthenticated routes (require JWT but no ownership)
 const jwtScoped = new Elysia()
   .use(authPlugin)
   .post(
     '/upload',
-    async ({ request, set }) => {
+    async ({ body, request, set }) => {
       try {
         const contentType = request.headers.get('content-type') ?? '';
         if (!contentType.includes('multipart/form-data')) {
@@ -103,10 +131,10 @@ const jwtScoped = new Elysia()
           };
         }
 
-        const formData = await request.formData();
-        const file = formData.get('file');
-        const userId = formData.get('userId');
-        const documentType = formData.get('documentType');
+        const formData = body as Record<string, unknown>;
+        const file = formData.file;
+        const userId = formData.userId;
+        const documentType = formData.documentType;
 
         if (!userId || typeof userId !== 'string') {
           set.status = 400;
@@ -145,28 +173,45 @@ const jwtScoped = new Elysia()
         return handleKycError(error, set);
       }
     },
-    { beforeHandle: [rateLimit()] },
+    {
+      beforeHandle: [rateLimit({ keyGenerator: walletKeyGenerator })],
+      detail: {
+        summary: 'Upload KYC document',
+        description: 'Upload a KYC document file (multipart/form-data)',
+        tags: ['KYC'],
+      },
+    },
   )
-  .get('/file/:documentId', async ({ params: { documentId }, set }) => {
-    try {
-      const { buffer, contentType, fileName } = await KYCController.getDocumentFile(documentId);
-      set.headers['Content-Type'] = contentType;
-      set.headers['Content-Disposition'] = `inline; filename="${fileName}"`;
-      return new Response(new Uint8Array(buffer), {
-        status: 200,
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `inline; filename="${fileName}"`,
-        },
-      });
-    } catch (error) {
-      const body = handleKycError(error, set);
-      return new Response(JSON.stringify(body), {
-        status: typeof set.status === 'number' ? set.status : 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-  });
+  .get(
+    '/file/:documentId',
+    async ({ params: { documentId }, set }) => {
+      try {
+        const { buffer, contentType, fileName } = await KYCController.getDocumentFile(documentId);
+        set.headers['Content-Type'] = contentType;
+        set.headers['Content-Disposition'] = `inline; filename="${fileName}"`;
+        return new Response(new Uint8Array(buffer), {
+          status: 200,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Disposition': `inline; filename="${fileName}"`,
+          },
+        });
+      } catch (error) {
+        const body = handleKycError(error, set);
+        return new Response(JSON.stringify(body), {
+          status: typeof set.status === 'number' ? set.status : 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    },
+    {
+      detail: {
+        summary: 'Get document file',
+        description: 'Retrieve a KYC document file by its document ID',
+        tags: ['KYC'],
+      },
+    },
+  );
 // Internal-only routes (require INTERNAL_API_KEY header and reject user JWTs)
 const internalScoped = new Elysia().post(
   '/verify/:documentId',
@@ -180,21 +225,33 @@ const internalScoped = new Elysia().post(
       const key =
         headers['internal-api-key'] || headers['x-internal-api-key'] || headers['internal_api_key'];
       const expected = process.env.INTERNAL_API_KEY;
-      if (!expected) {
-        console.error('INTERNAL_API_KEY is not configured for /kyc/verify');
+      const isOpsAuthorized = isInternalOperationsAuthorized(
+        headers as Record<string, string | undefined>,
+      );
+      const isApiKeyAuthorized = Boolean(expected && key === expected);
+
+      if (!expected && !process.env.OPERATIONS_BACKEND_CREDENTIAL) {
+        console.error(
+          'Neither INTERNAL_API_KEY nor OPERATIONS_BACKEND_CREDENTIAL is configured for /kyc/verify',
+        );
         throw new ApiError(500, 'INTERNAL_SERVER_ERROR', 'Internal key configuration missing');
       }
-      if (key !== expected) {
+      if (!isApiKeyAuthorized && !isOpsAuthorized) {
         throw new ApiError(401, 'UNAUTHORIZED', 'Internal key required');
       }
 
-      return await KYCController.verifyDocument(
-        documentId,
-        body as { verified: boolean; notes?: string },
-      );
+      const verifyBody = body as { verified: boolean; notes?: string; actorWallet?: string };
+      return await KYCController.verifyDocument(documentId, verifyBody, verifyBody.actorWallet);
     } catch (error) {
       return handleKycError(error, set);
     }
+  },
+  {
+    detail: {
+      summary: 'Verify a document',
+      description: 'Verify or reject a KYC document (internal API key required)',
+      tags: ['KYC'],
+    },
   },
 );
 

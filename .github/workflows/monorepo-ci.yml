@@ -5,33 +5,114 @@ on:
     branches: [ main, develop ]
     paths:
       - 'apps/**'
-      - '.github/workflows/monorepo-ci.yml'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/**'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'apps/**'
-      - '.github/workflows/monorepo-ci.yml'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/**'
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '24'
   BUN_VERSION: '1.x'
 
 jobs:
+  style-quality-gate:
+    name: Codebase Style Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Setup Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: '3.11'
+
+    - name: Run style quality gate scanner (em dashes and emojis)
+      run: python3 .github/scripts/check-style-rules.py .
+
+  shell-lint:
+    name: Shell Script Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Install ShellCheck
+      run: |
+        # Version-pinned to keep findings stable across runner images.
+        SHELLCHECK_VERSION='v0.10.0'
+        curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+          | tar xJ
+        sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+        shellcheck --version
+
+    - name: Syntax check every tracked shell script with bash -n
+      run: |
+        status=0
+        while IFS= read -r script; do
+          echo "bash -n $script"
+          bash -n "$script" || status=1
+        done < <(git ls-files '*.sh')
+        exit $status
+
+    - name: Lint every tracked shell script with ShellCheck
+      run: |
+        # Fail on error and warning severity. Style-level findings (SC2xxx
+        # notes) stay advisory so the gate blocks real breakage without
+        # bikeshedding formatting.
+        status=0
+        while IFS= read -r script; do
+          echo "shellcheck $script"
+          shellcheck --severity=warning "$script" || status=1
+        done < <(git ls-files '*.sh')
+        exit $status
+
+    - name: Check shell scripts are executable
+      run: |
+        # Every tracked .sh file is invoked directly or documented as
+        # ./scripts/... in the deployment guides, so it must carry the
+        # executable bit. A missing bit only surfaces on a fresh clone, which
+        # is exactly when a deployer hits it.
+        status=0
+        while IFS= read -r script; do
+          if [ ! -x "$script" ]; then
+            echo "NOT EXECUTABLE: $script (run: git update-index --chmod=+x $script)"
+            status=1
+          fi
+        done < <(git ls-files '*.sh')
+        if [ $status -eq 0 ]; then
+          echo "All shell scripts are executable"
+        fi
+        exit $status
+
   monorepo-integrity:
+
     name: Monorepo Integrity Check
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Node.js and Bun
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: ${{ env.NODE_VERSION }}
         
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ env.BUN_VERSION }}
         
@@ -96,27 +177,22 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ env.BUN_VERSION }}
         
-    - name: Audit all dependencies
+    - name: Install dependencies
       run: |
-        cd .
-
-        # Install root dependencies
         bun install --frozen-lockfile
         bun install --workspaces --frozen-lockfile
 
-        # Audit Bun workspaces
-        bun audit --workspaces || true
-
-        cd apps/api && bun install --frozen-lockfile && bun audit || true
-        cd ../shared && bun install --frozen-lockfile && bun audit || true
+    - name: Security audit
+      run: bash .github/scripts/dependency-audit.sh .
         
+
     - name: Check for license conflicts
       run: |
         cd .
@@ -142,15 +218,15 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Node.js and Bun
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: ${{ env.NODE_VERSION }}
         
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ env.BUN_VERSION }}
         
@@ -160,7 +236,7 @@ jobs:
 
         echo "Testing build performance..."
 
-        # Retry helper — platform-specific binaries (e.g. @next/swc-linux-x64-gnu)
+        # Retry helper - platform-specific binaries (e.g. @next/swc-linux-x64-gnu)
         # can fail on transient registry/CDN errors; three attempts is enough.
         bun_install() {
           for i in 1 2 3; do
@@ -174,10 +250,16 @@ jobs:
         # Record build times
         START_TIME=$(date +%s)
 
-        # Build webapp
-        cd apps/webapp
+        # Build shared first (required by webapp and api)
+        cd apps/shared
         bun_install
         bun run build
+        SHARED_BUILD_TIME=$(date +%s)
+
+        # Build webapp
+        cd ../webapp
+        bun_install
+        SKIP_ENV_VALIDATION=true bun run build
         WEBAPP_BUILD_TIME=$(date +%s)
 
         # Build API
@@ -185,23 +267,17 @@ jobs:
         bun_install
         bun run build
         API_BUILD_TIME=$(date +%s)
-
-        # Build shared
-        cd ../shared
-        bun_install
-        bun run build
-        SHARED_BUILD_TIME=$(date +%s)
         
         # Calculate build times
-        WEBAPP_TOTAL=$((WEBAPP_BUILD_TIME - START_TIME))
+        SHARED_TOTAL=$((SHARED_BUILD_TIME - START_TIME))
+        WEBAPP_TOTAL=$((WEBAPP_BUILD_TIME - SHARED_BUILD_TIME))
         API_TOTAL=$((API_BUILD_TIME - WEBAPP_BUILD_TIME))
-        SHARED_TOTAL=$((SHARED_BUILD_TIME - API_BUILD_TIME))
-        TOTAL=$((SHARED_BUILD_TIME - START_TIME))
+        TOTAL=$((API_BUILD_TIME - START_TIME))
         
         echo "Build times:"
+        echo "Shared: ${SHARED_TOTAL}s"
         echo "WebApp: ${WEBAPP_TOTAL}s"
         echo "API: ${API_TOTAL}s"
-        echo "Shared: ${SHARED_TOTAL}s"
         echo "Total: ${TOTAL}s"
         
         # Alert if build is slow (>5 minutes)
@@ -239,15 +315,15 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Node.js and Bun
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: ${{ env.NODE_VERSION }}
         
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ env.BUN_VERSION }}
         
@@ -295,7 +371,7 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Check for common security issues
       run: |
@@ -312,7 +388,10 @@ jobs:
         
         # Check for unsafe eval usage
         echo "3. Checking for unsafe eval usage..."
-        if grep -r "eval\|Function(" apps/ --include="*.ts" --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next | grep -v "//.*eval\|//.*Function("; then
+        # Match real call sites only. A bare "eval" substring also matches
+        # ordinary words like "retrieval" and "evaluation", which is not unsafe
+        # dynamic code and previously failed this job on a doc comment.
+        if grep -rE "\beval\(|\bnew Function\(" apps/ --include="*.ts" --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next | grep -v "//.*eval\|//.*Function("; then
           echo "Warning: Unsafe eval usage found"
           exit 1
         fi

@@ -193,13 +193,13 @@ akkuea-defi-rwa/
 
 ### Existing Documentation
 
-| Document              | Status   | Location                                   |
-| --------------------- | -------- | ------------------------------------------ |
-| Main README           | Complete | `docs/README.md`                           |
-| API Overview          | Complete | `docs/api/overview.md`                     |
-| System Architecture   | Complete | `docs/architecture/system-architecture.md` |
-| Contract Deployment   | Complete | `docs/contracts/deployment.md`             |
-| Getting Started Guide | Complete | `docs/guides/getting-started.md`           |
+| Document              | Status   | Location                                                                     |
+| --------------------- | -------- | ---------------------------------------------------------------------------- |
+| Main README           | Complete | `docs/README.md`                                                             |
+| API Overview          | Complete | `docs/api/overview.md`                                                       |
+| System Architecture   | Complete | `docs/architecture/system-architecture.md`                                   |
+| Contract Deployment   | Complete | `docs/contracts/deployment.md`                                               |
+| Getting Started Guide | Complete | `docs/local-setup.md` (superseded `docs/guides/getting-started.md`, removed) |
 
 ### Planning Documentation
 

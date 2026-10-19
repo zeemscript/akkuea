@@ -8,7 +8,8 @@ import type {
   ReactNode,
 } from "react";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import type { PropertyInfo } from "@real-estate-defi/shared";
+import type { PropertyInfo } from "@akkuea/shared";
+import { PROPERTY_IMAGE_PLACEHOLDER } from "@/components/marketplace/marketplace.utils";
 import { propertyApi } from "@/services/api/properties";
 
 const buySharesMock = mock(() =>
@@ -126,6 +127,50 @@ describe("InvestModal", () => {
     expect(connectWallet).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the placeholder image for a property without images", () => {
+    const view = render(
+      <InvestModal
+        property={{ ...property, images: [] }}
+        isOpen
+        onClose={() => {}}
+        isConnected={false}
+        walletAddress={null}
+        onConnectWallet={() => {}}
+      />,
+    );
+
+    const image = view.getByAltText(
+      `${property.name} - ${property.location.city}, ${property.location.country}`,
+    );
+    expect(image.getAttribute("src")).toBe(PROPERTY_IMAGE_PLACEHOLDER);
+  });
+
+  it("provides accessible names for the token quantity and payment method controls", () => {
+    const view = render(
+      <InvestModal
+        property={property}
+        isOpen
+        onClose={() => {}}
+        isConnected
+        walletAddress="GDB6EXAMPLEWALLETADDRESS1234567890123456789012345678901234"
+        onConnectWallet={() => Promise.resolve()}
+      />,
+    );
+
+    expect(
+      view.getByRole("button", { name: /decrease token count/i }),
+    ).not.toBeNull();
+    expect(
+      view.getByRole("button", { name: /increase token count/i }),
+    ).not.toBeNull();
+    expect(
+      view.getByRole("radio", { name: /usdc payment method/i }),
+    ).not.toBeNull();
+    expect(
+      view.getByRole("radio", { name: /fiat payment method/i }),
+    ).not.toBeNull();
+  });
+
   it("submits the investment transaction for a connected wallet", async () => {
     const onSuccess = mock(() => {});
 
@@ -152,9 +197,8 @@ describe("InvestModal", () => {
         "GDB6EXAMPLEWALLETADDRESS1234567890123456789012345678901234",
         3,
       );
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(view.queryByText(/Transaction submitted/i)).not.toBeNull();
     });
-
-    expect(onSuccess).toHaveBeenCalledTimes(1);
-    expect(view.queryByText(/Transaction submitted/i)).not.toBeNull();
   });
 });
